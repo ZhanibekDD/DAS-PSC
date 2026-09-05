@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
+*.db
+*.sqlite3
+.DS_Store
+Thumbs.db
+
+# Реальные данные проектов никогда не коммитим
+/data/
+/uploads/
+/nas/
+/private/
+*.zip
+*.rar
+*.7z
+*.dwg
+*.bak
