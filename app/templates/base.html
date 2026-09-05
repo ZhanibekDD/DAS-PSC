@@ -4,28 +4,32 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{% block title %}ПСК{% endblock %}</title>
-  <link rel="stylesheet" href="/static/app.css?v={{ app_version }}-simple1">
-  <link rel="stylesheet" href="/static/control.css?v={{ app_version }}-simple1">
-  <link rel="stylesheet" href="/static/progress.css?v={{ app_version }}-simple1">
-  <script src="/static/app.js?v={{ app_version }}-simple1" defer></script>
+  <link rel="stylesheet" href="/static/app.css?v={{ app_version }}-calm2">
+  <link rel="stylesheet" href="/static/control.css?v={{ app_version }}-calm2">
+  <link rel="stylesheet" href="/static/progress.css?v={{ app_version }}-calm2">
+  <script src="/static/app.js?v={{ app_version }}-calm2" defer></script>
 </head>
 <body>
+{% set current_path = request.url.path %}
 <header class="topbar">
   <div class="topbar-inner">
-    <a class="brand" href="/"><span class="brand-mark">ПСК</span><span class="brand-text">Контроль стройки</span></a>
+    <a class="brand" href="/" aria-label="ПСК — объекты">
+      <span class="brand-mark">ПСК</span>
+      <span class="brand-copy"><b>Контроль стройки</b><small>проектно-строительный контроль</small></span>
+    </a>
     <nav class="main-nav" aria-label="Основная навигация">
-      <a href="/">Объекты</a>
+      <a class="{{ 'active' if current_path == '/' else '' }}" href="/">Объекты</a>
       {% if project is defined %}
-      <a href="/projects/{{ project.id }}">Обзор</a>
-      <a href="/projects/{{ project.id }}/documents">Документы</a>
-      <a href="/projects/{{ project.id }}/control">Ход работ и предписания</a>
+      <a class="{{ 'active' if current_path == '/projects/' ~ project.id else '' }}" href="/projects/{{ project.id }}">Обзор</a>
+      <a class="{{ 'active' if '/documents' in current_path or '/imports/' in current_path else '' }}" href="/projects/{{ project.id }}/documents">Документы</a>
+      <a class="{{ 'active' if '/control' in current_path else '' }}" href="/projects/{{ project.id }}/control">Ход работ и предписания</a>
       {% endif %}
     </nav>
     <div class="topbar-version">v{{ app_version }}</div>
   </div>
 </header>
 <main class="main">{% block content %}{% endblock %}</main>
-<footer class="footer"><span>ПСК помогает собрать документы, найти пробелы и контролировать работы.</span><span>Исходные файлы не перемещаются.</span></footer>
+<footer class="footer"><span>ПСК · рабочая панель объекта</span><span>Исходные файлы не перемещаются</span></footer>
 <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
 </body>
 </html>
