@@ -56,6 +56,84 @@ PROJECT_HINTS = (
 SERVICE_SUFFIXES = {".bak", ".tmp", ".temp", ".swp", ".swo", ".old", ".orig", ".autosave"}
 POS_RE = re.compile(r"(?:^|[\s._()№\-])пос(?:$|[\s._()№\-])", re.IGNORECASE)
 
+# These are intentionally stronger phrases than the path rules. A project can mention
+# a passport, certificate or journal in passing, so generic single words are not enough
+# to classify by content. If several incompatible document types are strongly present,
+# the content result stays in the manual-review bucket.
+CONTENT_RULES: list[tuple[str, tuple[str, ...]]] = [
+    ("ППР и ТК", (
+        "проект производства работ",
+        "технологическая карта на производство работ",
+        "технологическая карта производства работ",
+    )),
+    ("ИД черновая", (
+        "акт освидетельствования скрытых работ",
+        "акт освидетельствования ответственных конструкций",
+        "исполнительная документация",
+    )),
+    ("Геодезическая съемка", (
+        "исполнительная геодезическая съемка",
+        "исполнительная геодезическая съёмка",
+        "исполнительная съемка",
+        "исполнительная съёмка",
+        "картограмма земляных масс",
+    )),
+    ("Заключения ЛНК", (
+        "заключение лаборатории неразрушающего контроля",
+        "неразрушающий контроль сварных соединений",
+        "ультразвуковой контроль сварных соединений",
+        "радиографический контроль сварных соединений",
+    )),
+    ("Сертификаты и паспорта", (
+        "сертификат качества",
+        "сертификат соответствия",
+        "паспорт изделия",
+        "паспорт качества",
+        "паспорт оборудования",
+    )),
+    ("Журналы ведения работ", (
+        "общий журнал работ",
+        "журнал сварочных работ",
+        "журнал бетонных работ",
+        "журнал производства работ",
+    )),
+    ("Уведомление о закрытие предписаний", (
+        "уведомление о закрытии предписания",
+        "уведомление об устранении замечаний",
+    )),
+    ("Отчеты технадзора", (
+        "отчет технического надзора",
+        "отчёт технического надзора",
+        "отчет инженера технического надзора",
+        "отчёт инженера технического надзора",
+    )),
+    ("Допускные документы", (
+        "наряд-допуск на производство работ",
+        "наряд допуск на производство работ",
+        "разрешение на производство работ",
+    )),
+    ("ИД ростехнадзор", (
+        "ростехнадзор",
+        "федеральная служба по экологическому технологическому и атомному надзору",
+    )),
+    ("Согласование изменение объекта", (
+        "согласование изменений проектной документации",
+        "согласование изменения проектной документации",
+    )),
+    ("Ход строильства объекта", (
+        "ход строительства объекта",
+        "сводка строительства объекта",
+        "сводка по строительству объекта",
+    )),
+    ("Проект", (
+        "проектная документация",
+        "рабочая документация",
+        "рабочие чертежи",
+        "пояснительная записка",
+        "генеральный план",
+    )),
+]
+
 
 def classify_path(path: str) -> Classification:
     normalized = path.replace("\\", "/").casefold().replace("ё", "е")
@@ -98,6 +176,52 @@ def classify_path(path: str) -> Classification:
         return Classification("Проект", 0.72, "инженерная модель; требуется проверка")
 
     return Classification(UNKNOWN, 0.30, "недостаточно признаков в имени/пути")
+
+
+def classify_content(text: str) -> Classification | None:
+    normalized = text.casefold().replace("ё", "е")
+    head = normalized[:5000]
+    found: list[tuple[str, bool]] = []
+    for category, phrases in CONTENT_RULES:
+        matches = [phrase.replace("ё", "е") for phrase in phrases if phrase.replace("ё", "е") in normalized]
+        if matches:
+            in_head = any(phrase in head for phrase in matches)
+            found.append((category, in_head))
+
+    if not found:
+        return None
+
+    unique = list(dict.fromkeys(category for category, _ in found))
+    if len(unique) == 1:
+        category = unique[0]
+        return Classification(category, 0.97, f"текст документа: {category}")
+
+    head_categories = list(dict.fromkeys(category for category, in_head in found if in_head))
+    if len(head_categories) == 1:
+        category = head_categories[0]
+        return Classification(category, 0.93, f"заголовочная часть текста: {category}; есть вторичные признаки")
+
+    return Classification(UNKNOWN, 0.45, "в тексте есть сильные признаки нескольких типов документов; нужна проверка")
+
+
+def combine_classifications(path_result: Classification, content_result: Classification | None) -> Classification:
+    if path_result.category == SERVICE or content_result is None:
+        return path_result
+    if content_result.category == UNKNOWN:
+        if path_result.category == UNKNOWN:
+            return content_result
+        return Classification(path_result.category, min(path_result.confidence, 0.79),
+                              f"{path_result.reason}; текст неоднозначен, нужна проверка")
+    if path_result.category == UNKNOWN:
+        return content_result
+    if path_result.category == content_result.category:
+        return Classification(path_result.category, max(0.98, path_result.confidence, content_result.confidence),
+                              f"имя/путь и текст подтверждают: {path_result.category}")
+    if content_result.confidence >= HIGH_CONFIDENCE and path_result.confidence < HIGH_CONFIDENCE:
+        return Classification(content_result.category, 0.94,
+                              f"текст документа указывает: {content_result.category}; имя/путь было менее уверенным")
+    return Classification(UNKNOWN, 0.40,
+                          f"конфликт имени/пути ({path_result.category}) и текста ({content_result.category}); нужна проверка")
 
 
 def extract_project_code(path: str) -> str | None:
