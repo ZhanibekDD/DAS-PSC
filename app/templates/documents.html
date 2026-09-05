@@ -12,6 +12,30 @@
 
 <p class="warning">Назначение, код и ревизия определяются только по имени/пути. «Уверенность» ниже — оценка силы правил, не вероятность правильности и не проверка содержания документа. Файлы пока не открываются из реестра. Точные SHA-256 дубли не удаляются автоматически.</p>
 
+{% if reclass.changed %}
+<section class="panel rule-refresh">
+  <div class="row">
+    <div>
+      <p class="eyebrow">Новая версия правил</p>
+      <h2>Обновить предложения для существующего реестра</h2>
+      <p>Новые правила изменят предложения для <b>{{ reclass.changed }}</b> из {{ reclass.eligible }} нетронутых документов. Уже подтвержденные или вручную измененные записи защищены: <b>{{ reclass.protected }}</b>.</p>
+      <p>После пересчета среди изменяемых записей будет: {{ reclass.new_high }} высокой, {{ reclass.new_medium }} средней и {{ reclass.new_low }} низкой уверенности.</p>
+    </div>
+    <form data-request="/api/projects/{{ project.id }}/documents/reclassify" data-json="true" data-confirm="Пересчитать {{ reclass.changed }} машинных предложений по текущим правилам? Подтвержденные человеком и вручную измененные документы не будут затронуты.">
+      <input type="hidden" name="expected_token" value="{{ reclass.token }}">
+      <button type="submit">Пересчитать предложения · {{ reclass.changed }}</button>
+      <p class="form-message" role="status"></p>
+    </form>
+  </div>
+  <details>
+    <summary>Показать предпросмотр изменений</summary>
+    {% if reclass.transitions %}<div class="transition-list">{% for t in reclass.transitions %}<span>{{ t['from'] }} → {{ t['to'] }} · {{ t.count }}</span>{% endfor %}</div>{% endif %}
+    {% if reclass.samples %}<div class="table-wrap"><table class="refresh-table"><thead><tr><th>Файл</th><th>Было</th><th>Станет</th></tr></thead><tbody>{% for item in reclass.samples %}<tr><td><b>{{ item.name }}</b><small class="path">{{ item.path }}</small></td><td>{{ item.from_category }}<small>{{ '%.2f'|format(item.from_score) }}</small></td><td>{{ item.to_category }}<small>{{ '%.2f'|format(item.to_score) }} · {{ item.reason }}</small></td></tr>{% endfor %}</tbody></table></div>{% endif %}
+  </details>
+  <small>Пересчет использует только сохраненный путь и имя файла. ZIP повторно загружать не нужно. Содержание PDF/DWG не читается.</small>
+</section>
+{% endif %}
+
 <section class="panel review-summary">
   <div class="row">
     <div>
