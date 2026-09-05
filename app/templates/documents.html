@@ -47,7 +47,7 @@
   <article class="doc-card {{ 'doc-done' if doc.reviewed else '' }}">
     <div class="doc-main">
       <div class="file-icon">{{ (doc.name.rsplit('.',1)[-1] if '.' in doc.name else 'FILE')[:4]|upper }}</div>
-      <div class="doc-title"><div class="doc-state"><span class="pill {{ 'pill-ok' if doc.reviewed else 'pill-wait' }}">{{ 'Проверено' if doc.reviewed else 'Нужно проверить' }}</span>{% if doc.content_needs_ocr %}<span class="pill pill-ocr">Нужен OCR</span>{% elif doc.content_status == 'text' %}<span class="pill pill-text">Текст прочитан</span>{% endif %}</div><h3>{{ doc.name }}</h3><p>{{ doc.category }}</p></div>
+      <div class="doc-title"><div class="doc-state"><span class="pill {{ 'pill-ok' if doc.reviewed else 'pill-wait' }}">{{ 'Категория проверена' if doc.reviewed else 'Нужно проверить' }}</span>{% if doc.content_needs_ocr %}<span class="pill pill-ocr">Нужен OCR</span>{% elif doc.content_status == 'text' %}<span class="pill pill-text">Текст прочитан</span>{% endif %}</div><h3>{{ doc.name }}</h3><p>{{ doc.category }}</p></div>
     </div>
     <form class="doc-review" data-request="/api/projects/{{ project.id }}/documents/{{ doc.id }}" data-method="PATCH" data-json="true">
       <input type="hidden" name="version" value="{{ doc.version }}">
