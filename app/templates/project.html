@@ -2,42 +2,56 @@
 {% block title %}{{ project.name }} · ПСК{% endblock %}
 {% block content %}
 <header class="object-header">
-  <div><a class="back-link" href="/">← Все объекты</a><span class="kicker">{{ project.code }}</span><h1>{{ project.name }}</h1><p>{{ project.customer or 'Заказчик не указан' }}{% if project.responsible %} · {{ project.responsible }}{% endif %}</p></div>
+  <div>
+    <a class="back-link" href="/">← Все объекты</a>
+    <span class="project-code">{{ project.code }}</span>
+    <h1>{{ project.name }}</h1>
+    <p>{{ project.customer or 'Заказчик не указан' }}{% if project.responsible %} · Ответственный: {{ project.responsible }}{% endif %}</p>
+  </div>
   <div class="header-actions"><a class="button secondary" href="/projects/{{ project.id }}/documents">Документы</a><a class="button" href="/projects/{{ project.id }}/control">Работы и замечания</a></div>
 </header>
 
 {% if summary.documents == 0 %}
-<section class="next-action primary-action"><div class="action-number">1</div><div><span class="kicker">Следующий шаг</span><h2>Загрузите документы объекта</h2><p>ПСК разберёт архив и покажет структуру документов, дубли и то, что требует проверки.</p></div><a class="button" href="#upload">Загрузить ZIP</a></section>
+<section class="next-action primary-action"><div class="action-number">1</div><div><span class="kicker">Что делать сейчас</span><h2>Загрузить документы объекта</h2><p>После загрузки ПСК покажет, что найдено, где нужны проверки и есть ли точные дубли.</p></div><a class="button" href="#upload">Загрузить ZIP</a></section>
+{% elif control.overdue_issues > 0 %}
+<section class="next-action danger-action"><div class="action-number">!</div><div><span class="kicker">Что делать сейчас</span><h2>Просрочено замечаний: {{ control.overdue_issues }}</h2><p>Сначала проверьте просроченные замечания и ответственных.</p></div><a class="button danger-button" href="/projects/{{ project.id }}/control?overdue=true#issues">Открыть просроченные</a></section>
 {% elif summary.review > 0 %}
-<section class="next-action"><div class="action-number">!</div><div><span class="kicker">Что делать сейчас</span><h2>Проверить {{ summary.review }} документов</h2><p>ПСК уже сделал черновую классификацию. Вам не нужно перебирать всё — откройте очередь и подтвердите только спорное.</p></div><a class="button" href="/projects/{{ project.id }}/documents?review=true">Открыть очередь</a></section>
+<section class="next-action"><div class="action-number">!</div><div><span class="kicker">Что делать сейчас</span><h2>Проверить {{ summary.review }} документов</h2><p>ПСК уже сделал черновой разбор. Откройте очередь и подтвердите только спорные позиции.</p></div><a class="button" href="/projects/{{ project.id }}/documents?review=true">Открыть очередь</a></section>
 {% elif control.open_issues > 0 %}
-<section class="next-action"><div class="action-number">!</div><div><span class="kicker">Что делать сейчас</span><h2>Есть открытые замечания: {{ control.open_issues }}</h2><p>Проверьте сроки, ответственных и подтверждающие документы.</p></div><a class="button" href="/projects/{{ project.id }}/control#issues">Открыть замечания</a></section>
+<section class="next-action"><div class="action-number">!</div><div><span class="kicker">Что делать сейчас</span><h2>Открытых замечаний: {{ control.open_issues }}</h2><p>Проверьте сроки, статус устранения и подтверждающие документы.</p></div><a class="button" href="/projects/{{ project.id }}/control#issues">Открыть замечания</a></section>
 {% else %}
-<section class="next-action success-action"><div class="action-number">✓</div><div><span class="kicker">Состояние объекта</span><h2>Критичных действий сейчас не видно</h2><p>Продолжайте добавлять новые документы, этапы работ и замечания по мере поступления.</p></div></section>
+<section class="next-action success-action"><div class="action-number">✓</div><div><span class="kicker">Состояние объекта</span><h2>Срочных действий сейчас не видно</h2><p>Добавляйте новые документы, этапы и замечания по мере работы.</p></div></section>
 {% endif %}
 
-<section class="metric-grid">
+<section class="metric-grid compact-dashboard-metrics">
   <article><span>Документы</span><strong>{{ summary.documents }}</strong><small>{{ summary.review }} требуют проверки</small></article>
-  <article><span>Прочитан текст</span><strong>{{ summary.content_text }}</strong><small>{{ summary.content_ocr_needed }} PDF требуют OCR</small></article>
+  <article><span>Прочитан текст</span><strong>{{ summary.content_text }}</strong><small>{{ summary.content_ocr_needed }} PDF нужен OCR</small></article>
   <article><span>Открытые замечания</span><strong>{{ control.open_issues }}</strong><small>{{ control.overdue_issues }} просрочено</small></article>
   <article><span>Ход работ</span><strong>{{ (project.progress|string + '%') if project.progress is not none else '—' }}</strong><small>оценка вводится вручную</small></article>
 </section>
 
-<section class="panel upload-panel" id="upload">
-  <div class="section-head"><div><span class="kicker">Документы</span><h2>Добавить или обновить документы</h2><p>Выберите ZIP. ПСК сначала покажет результат анализа и ничего не применит без подтверждения.</p></div><a class="text-link" href="/projects/{{ project.id }}/documents">Открыть все документы →</a></div>
-  <form data-request="/api/projects/{{ project.id }}/imports" data-upload="true" class="upload-form">
-    <label class="dropzone"><span class="dropzone-icon">ZIP</span><span><b>Выберите архив объекта</b><small>до 256 МиБ</small></span><input type="file" name="file" accept=".zip" required></label>
-    <div class="form-actions"><button type="submit">Анализировать архив</button><p class="form-message" role="status"></p></div>
-  </form>
-</section>
+<section class="workspace-grid">
+  <article class="workspace-card" id="upload">
+    <div class="workspace-card-head"><div><span class="kicker">Документы</span><h2>Документы объекта</h2><p>Добавьте новый архив или откройте уже разобранные документы.</p></div><a class="text-link" href="/projects/{{ project.id }}/documents">Открыть реестр →</a></div>
+    <div class="workspace-stats"><span><b>{{ summary.documents }}</b> всего</span><span><b>{{ summary.review }}</b> проверить</span><span><b>{{ summary.duplicate_groups }}</b> групп дублей</span></div>
+    <form data-request="/api/projects/{{ project.id }}/imports" data-upload="true" class="upload-form compact-upload">
+      <label class="dropzone"><span class="dropzone-icon">ZIP</span><span><b>Выберите архив объекта</b><small>до 256 МиБ · сначала будет предпросмотр</small></span><input type="file" name="file" accept=".zip" required></label>
+      <div class="form-actions"><button type="submit">Анализировать архив</button><p class="form-message" role="status"></p></div>
+    </form>
+  </article>
 
-<section class="two-column-cards">
-  <article class="panel compact-panel"><div class="section-head"><div><span class="kicker">Документы</span><h2>Что найдено</h2></div></div><p><b>{{ summary.coverage.present }}</b> из {{ summary.coverage.total }} разделов имеют хотя бы один найденный файл.</p><p><b>{{ summary.duplicate_groups }}</b> групп точных дублей.</p>{% if summary.unknown %}<p class="attention-line"><b>{{ summary.unknown }}</b> документов пока без понятной категории.</p>{% endif %}<a class="button secondary" href="/projects/{{ project.id }}/documents">Посмотреть документы</a></article>
-  <article class="panel compact-panel"><div class="section-head"><div><span class="kicker">Стройка</span><h2>Работы и замечания</h2></div></div><p>Этапов: <b>{{ control.stages }}</b> · завершено: <b>{{ control.done_stages }}</b>.</p><p>Открытых замечаний: <b>{{ control.open_issues }}</b> · просрочено: <b>{{ control.overdue_issues }}</b>.</p><a class="button secondary" href="/projects/{{ project.id }}/control">Открыть контроль</a></article>
+  <article class="workspace-card">
+    <div class="workspace-card-head"><div><span class="kicker">Стройка</span><h2>Работы и замечания</h2><p>Контроль этапов, ответственных, сроков и замечаний.</p></div><a class="text-link" href="/projects/{{ project.id }}/control">Открыть контроль →</a></div>
+    <div class="workspace-stats"><span><b>{{ control.stages }}</b> этапов</span><span><b>{{ control.done_stages }}</b> завершено</span><span class="{{ 'danger-text' if control.overdue_issues else '' }}"><b>{{ control.open_issues }}</b> замечаний</span></div>
+    {% if control.overdue_issues %}<div class="inline-alert danger"><b>{{ control.overdue_issues }} просрочено</b><span>Нужно проверить сроки и ответственных.</span></div>
+    {% elif control.open_issues %}<div class="inline-alert warning"><b>{{ control.open_issues }} открыто</b><span>Есть замечания, которые ещё не закрыты.</span></div>
+    {% else %}<div class="inline-alert ok"><b>Нет открытых замечаний</b><span>Новые можно добавить в разделе контроля.</span></div>{% endif %}
+    <a class="button secondary" href="/projects/{{ project.id }}/control">Перейти к работам</a>
+  </article>
 </section>
 
 <section class="panel" id="coverage">
-  <details class="advanced-block"><summary>Разделы документации <span>{{ summary.coverage.present }} / {{ summary.coverage.total }}</span></summary><div class="check-grid">{% for item in summary.coverage['items'] %}<article class="check-item {{ 'ok' if item.present else 'missing' }}"><b>{{ item.category }}</b>{% if item.present %}<span>{{ item.count }} файлов · подтверждено: {{ item.reviewed }}</span>{% else %}<span>Не найдено</span>{% endif %}</article>{% endfor %}</div><p class="hint">Наличие файла не означает полноту комплекта и не является процентом готовности строительства.</p></details>
+  <details class="advanced-block"><summary>Разделы документации <span>{{ summary.coverage.present }} / {{ summary.coverage.total }}</span></summary><div class="check-grid">{% for item in summary.coverage['items'] %}<article class="check-item {{ 'ok' if item.present else 'missing' }}"><b>{{ item.category }}</b>{% if item.present %}<span>{{ item.count }} файлов · подтверждено: {{ item.reviewed }}</span>{% else %}<span>Не найдено</span>{% endif %}</article>{% endfor %}</div><p class="hint">Это только наличие файлов по категориям. Оно не равно полноте исполнительной документации и не является процентом готовности строительства.</p></details>
 </section>
 
 <section class="panel" id="edit"><details class="advanced-block"><summary>Настройки объекта</summary><form data-request="/api/projects/{{ project.id }}" data-method="PATCH" data-json="true"><input type="hidden" name="version" value="{{ project.version }}"><div class="form-grid">{% for key,label in [('name','Название'),('code','Код объекта'),('customer','Заказчик'),('contractor','Подрядчик'),('responsible','Ответственный'),('stage','Текущий этап')] %}<label>{{ label }}<input name="{{ key }}" value="{{ project[key] }}" maxlength="{{ 100 if key in ['code','stage'] else 200 }}" {% if key in ['name','code'] %}required{% endif %}></label>{% endfor %}<label>Начало<input type="date" name="start_date" value="{{ project.start_date }}"></label><label>Окончание<input type="date" name="end_date" value="{{ project.end_date }}"></label><label>Ход работ, %<input type="number" name="progress" min="0" max="100" step="1" value="{{ project.progress if project.progress is not none else '' }}"></label></div><button type="submit">Сохранить</button><p class="form-message" role="status"></p></form></details></section>
