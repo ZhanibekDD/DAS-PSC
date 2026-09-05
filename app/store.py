@@ -14,6 +14,7 @@ from app.services.classifier import (
     MEDIUM_CONFIDENCE,
     SERVICE,
     UNKNOWN,
+    classify_path,
     confidence_level,
 )
 from app.services.completeness import build_completeness
@@ -113,6 +114,52 @@ class Store:
         }[item["confidence_level"]]
         return item
 
+    @staticmethod
+    def _reclassification_plan(rows) -> dict:
+        state = [[r["id"], r["version"], r["category"], r["suggested_category"],
+                  float(r["score"]), r["reason"], r["path"]] for r in rows]
+        token = hashlib.sha256(json.dumps(state, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+        changes = []
+        transitions = Counter()
+        new_bands = Counter()
+        for row in rows:
+            fresh = classify_path(row["path"])
+            changed = (
+                row["category"] != fresh.category
+                or row["suggested_category"] != fresh.category
+                or abs(float(row["score"]) - fresh.confidence) > 1e-9
+                or row["reason"] != fresh.reason
+            )
+            if not changed:
+                continue
+            transitions[(row["category"], fresh.category)] += 1
+            new_bands[confidence_level(fresh.confidence)] += 1
+            changes.append({
+                "id": row["id"],
+                "name": row["name"],
+                "path": row["path"],
+                "from_category": row["category"],
+                "to_category": fresh.category,
+                "from_score": float(row["score"]),
+                "to_score": fresh.confidence,
+                "reason": fresh.reason,
+            })
+        return {
+            "token": token,
+            "eligible": len(rows),
+            "changed": len(changes),
+            "unchanged": len(rows) - len(changes),
+            "transitions": [
+                {"from": old, "to": new, "count": count}
+                for (old, new), count in sorted(transitions.items())
+            ],
+            "new_high": new_bands["high"],
+            "new_medium": new_bands["medium"],
+            "new_low": new_bands["low"],
+            "samples": changes[:12],
+            "_changes": changes,
+        }
+
     def create_project(self, values: dict) -> dict:
         pid = uuid4().hex
         with self.connect(True) as db:
@@ -150,7 +197,6 @@ class Store:
     def stage_import(self, pid: str, source: str, analysis: dict) -> dict:
         self.project(pid)
         payload = json.dumps(analysis, ensure_ascii=False, sort_keys=True)
-        # Independent of ZIP ordering, compression, or client filename.
         identity = sorted((r["path"], r["sha256"]) for r in analysis["files"])
         digest = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
         iid = uuid4().hex
@@ -236,7 +282,6 @@ class Store:
 
     def duplicate_groups(self, pid: str, q: str = "", category: str = "", review: bool = False,
                          page: int = 1, page_size: int = 25) -> dict:
-        """Group byte-identical files by SHA-256. Filters select groups; all copies are shown."""
         self.project(pid)
         where, params = ["d.project_id=?"], [pid]
         if q:
@@ -253,8 +298,7 @@ class Store:
         clause = " AND ".join(where)
         with self.connect() as db:
             total = db.execute(
-                f"SELECT COUNT(*) FROM (SELECT d.sha256 FROM documents d WHERE {clause} GROUP BY d.sha256)",
-                params,
+                f"SELECT COUNT(*) FROM (SELECT d.sha256 FROM documents d WHERE {clause} GROUP BY d.sha256)", params
             ).fetchone()[0]
             hashes = [r[0] for r in db.execute(
                 f"SELECT d.sha256 FROM documents d WHERE {clause} GROUP BY d.sha256 "
@@ -289,7 +333,6 @@ class Store:
             self.event(db, pid, "document_reviewed", f"Документ #{did}: {row[0]} → {category}")
 
     def bulk_review(self, pid: str, min_score: float = HIGH_CONFIDENCE, category: str = "") -> dict:
-        """Confirm only unchanged machine suggestions above the requested conservative score."""
         self.project(pid)
         if category and category not in self.categories:
             raise ValueError("Неизвестная категория")
@@ -310,16 +353,54 @@ class Store:
                            f"Массово подтверждено предложений: {changed}{scope}; порог правил {min_score:.2f}")
         return {"changed": changed}
 
+    def reclassification_preview(self, pid: str) -> dict:
+        self.project(pid)
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT id,name,path,category,suggested_category,score,reason,version "
+                "FROM documents WHERE project_id=? AND reviewed=0 AND version=1 ORDER BY id", (pid,)
+            ).fetchall()
+            protected = db.execute(
+                "SELECT COUNT(*) FROM documents WHERE project_id=? AND (reviewed=1 OR version>1)", (pid,)
+            ).fetchone()[0]
+        plan = self._reclassification_plan(rows)
+        plan.pop("_changes")
+        plan["protected"] = protected
+        return plan
+
+    def apply_reclassification(self, pid: str, expected_token: str) -> dict:
+        self.project(pid)
+        with self.connect(True) as db:
+            rows = db.execute(
+                "SELECT id,name,path,category,suggested_category,score,reason,version "
+                "FROM documents WHERE project_id=? AND reviewed=0 AND version=1 ORDER BY id", (pid,)
+            ).fetchall()
+            plan = self._reclassification_plan(rows)
+            if not expected_token or expected_token != plan["token"]:
+                raise Conflict("Реестр изменился после предпросмотра. Обновите страницу и проверьте изменения заново")
+            changed = 0
+            for item in plan["_changes"]:
+                fresh = classify_path(item["path"])
+                changed += db.execute(
+                    "UPDATE documents SET suggested_category=?,category=?,score=?,reason=? "
+                    "WHERE project_id=? AND id=? AND reviewed=0 AND version=1",
+                    (fresh.category, fresh.category, fresh.confidence, fresh.reason, pid, item["id"]),
+                ).rowcount
+            if changed != plan["changed"]:
+                raise Conflict("Не удалось атомарно обновить все предложения. Изменения отменены")
+            if changed:
+                self.event(db, pid, "document_rules_refreshed",
+                           f"Пересчитаны предложения правил для {changed} нетронутых документов; подтвержденные человеком записи сохранены")
+        return {"changed": changed, "eligible": plan["eligible"]}
+
     def summary(self, pid: str) -> dict:
         self.project(pid)
         with self.connect() as db:
             rows = db.execute(
-                "SELECT category,suggested_category,reviewed,size,sha256,score FROM documents WHERE project_id=?",
-                (pid,),
+                "SELECT category,suggested_category,reviewed,size,sha256,score FROM documents WHERE project_id=?", (pid,)
             ).fetchall()
             duplicate_groups = db.execute(
-                "SELECT COUNT(*) FROM (SELECT sha256 FROM documents WHERE project_id=? GROUP BY sha256 HAVING COUNT(*)>1)",
-                (pid,),
+                "SELECT COUNT(*) FROM (SELECT sha256 FROM documents WHERE project_id=? GROUP BY sha256 HAVING COUNT(*)>1)", (pid,)
             ).fetchone()[0]
         meaningful = [r for r in rows if r["category"] != SERVICE and r["size"] > 0]
         report = build_completeness([r["category"] for r in meaningful], self.categories)
@@ -327,13 +408,11 @@ class Store:
             cat_rows = [r for r in meaningful if r["category"] == item["category"]]
             item["reviewed"] = sum(bool(r["reviewed"]) for r in cat_rows)
             item["pending"] = sum(not r["reviewed"] for r in cat_rows)
-            item["high_pending"] = sum(
-                not r["reviewed"] and r["score"] >= HIGH_CONFIDENCE for r in cat_rows
-            )
+            item["high_pending"] = sum(not r["reviewed"] and r["score"] >= HIGH_CONFIDENCE for r in cat_rows)
         confirmed_sections = sum(item["reviewed"] > 0 for item in report["items"])
         high_pending = sum(
-            not r["reviewed"] and r["category"] not in {UNKNOWN, SERVICE}
-            and r["score"] >= HIGH_CONFIDENCE for r in meaningful
+            not r["reviewed"] and r["category"] not in {UNKNOWN, SERVICE} and r["score"] >= HIGH_CONFIDENCE
+            for r in meaningful
         )
         medium_pending = sum(
             not r["reviewed"] and r["category"] not in {UNKNOWN, SERVICE}
