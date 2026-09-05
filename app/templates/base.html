@@ -3,5 +3,5 @@
 <title>{% block title %}DAS-PSC{% endblock %}</title><link rel="stylesheet" href="/static/app.css"><link rel="stylesheet" href="/static/control.css"><script src="/static/app.js" defer></script></head>
 <body><aside class="sidebar"><a class="brand" href="/">DAS<span>PSC</span></a><small>Проектно-строительный контроль</small>
 <nav><a href="/">Объекты</a>{% if project is defined %}<a href="/projects/{{ project.id }}">Паспорт объекта</a><a href="/projects/{{ project.id }}/documents">Документы</a><a href="/projects/{{ project.id }}#coverage">Разделы документации</a><a href="/projects/{{ project.id }}#upload">Импорт ZIP</a><a href="/projects/{{ project.id }}/control">Ход работ и предписания</a>{% endif %}</nav>
-<div class="sidebar-footer">v0.3 · пилот<br>Исходники не перемещаются<br>Классификация по правилам</div></aside>
+<div class="sidebar-footer">v{{ app_version }} · пилот<br>Исходники не перемещаются<br>Классификация по правилам</div></aside>
 <main class="main">{% block content %}{% endblock %}</main><div id="notice" class="notice" role="status" aria-live="polite" hidden></div></body></html>
