@@ -16,7 +16,7 @@
 {% if reclass.changed %}
 <section class="next-action rule-refresh">
   <div class="action-number">↻</div>
-  <div><span class="kicker">Есть улучшенные правила</span><h2>ПСК может уточнить {{ reclass.changed }} предложений</h2><p>Уже подтвержденные человеком записи не будут затронуты.</p><details><summary>Посмотреть, что изменится</summary>{% if reclass.transitions %}<div class="transition-list">{% for t in reclass.transitions %}<span>{{ t['from'] }} → {{ t['to'] }} · {{ t.count }}</span>{% endfor %}</div>{% endif %}{% if reclass.samples %}<div class="simple-change-list">{% for item in reclass.samples %}<div><b>{{ item.name }}</b><span>{{ item.from_category }} → {{ item.to_category }}</span></div>{% endfor %}</div>{% endif %}</details></div>
+  <div><span class="kicker">Обновить предложения для существующего реестра</span><h2>ПСК может уточнить {{ reclass.changed }} предложений</h2><p>Уже подтвержденные человеком записи не будут затронуты.</p><details><summary>Посмотреть, что изменится</summary>{% if reclass.transitions %}<div class="transition-list">{% for t in reclass.transitions %}<span>{{ t['from'] }} → {{ t['to'] }} · {{ t.count }}</span>{% endfor %}</div>{% endif %}{% if reclass.samples %}<div class="simple-change-list">{% for item in reclass.samples %}<div><b>{{ item.name }}</b><span>{{ item.from_category }} → {{ item.to_category }}</span></div>{% endfor %}</div>{% endif %}</details></div>
   <form data-request="/api/projects/{{ project.id }}/documents/reclassify" data-json="true" data-confirm="Применить новые машинные предложения? Подтвержденные человеком документы не будут изменены."><input type="hidden" name="expected_token" value="{{ reclass.token }}"><button type="submit">Обновить предложения</button><p class="form-message" role="status"></p></form>
 </section>
 {% endif %}
@@ -37,7 +37,7 @@
 </form>
 
 {% if duplicates %}
-<section class="panel"><div class="section-head"><div><h2>Одинаковые файлы</h2><p>{{ duplicate_result.total }} групп. Ничего автоматически не удаляется.</p></div><a class="button secondary compact" href="/projects/{{ project.id }}/documents">Обычный список</a></div>
+<section class="panel"><div class="section-head"><div><h2>Группы точных дублей</h2><p>{{ duplicate_result.total }} групп. Ничего автоматически не удаляется.</p></div><a class="button secondary compact" href="/projects/{{ project.id }}/documents">Обычный список</a></div>
 {% for group in duplicate_result.groups %}<article class="duplicate-group"><div class="duplicate-head"><b>Группа {{ loop.index + (duplicate_result.page - 1) * duplicate_result.page_size }} · {{ group.count }} копии</b><span class="muted">Содержимое полностью совпадает</span></div>{% for doc in group['items'] %}<div class="duplicate-row"><div><b>{{ doc.name }}</b><small class="path">{{ doc.path }}</small></div><span class="pill">{{ doc.category }}</span></div>{% endfor %}</article>{% else %}<div class="empty-inline">Дублей по этому фильтру нет.</div>{% endfor %}
 <div class="pagination">{% if duplicate_result.page > 1 %}<a href="{{ request.url.include_query_params(page=duplicate_result.page-1) }}">← Назад</a>{% endif %}{% if duplicate_result.page * duplicate_result.page_size < duplicate_result.total %}<a href="{{ request.url.include_query_params(page=duplicate_result.page+1) }}">Дальше →</a>{% endif %}</div></section>
 {% else %}
