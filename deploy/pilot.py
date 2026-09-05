@@ -79,7 +79,7 @@ def containers():
                 '"project":{{json (index .Config.Labels "com.docker.compose.project")}},'
                 '"status":{{json .State.Status}},"started":{{json .State.StartedAt}},'
                 '"restarts":{{json .RestartCount}},"health":'
-                '{{if .State.Health}}{{json .State.Health.Status}}{{else}}"none"{{end}}}')
+                '{{with (index .State "Health")}}{{json .Status}}{{else}}"none"{{end}}}')
     text = run("docker", "inspect", "--format", template, *ids)
     return [json.loads(line) for line in text.splitlines()]
 
