@@ -1,6 +1,99 @@
-{% extends "base.html" %}{% block title %}Реестр · {{ project.name }}{% endblock %}{% block content %}
-<header class="page-head"><div><p class="eyebrow">{{ project.code }} / документы</p><h1>Реестр документов</h1><p>{{ summary.documents }} файлов · {{ summary.review }} категорий не проверено · {{ summary.duplicate_groups }} групп дублей</p></div><a class="button secondary" href="/api/projects/{{ project.id }}/documents.csv">Экспорт CSV</a></header>
-<p class="warning">Назначение, код и ревизия определены по имени/пути. Проверяется категория, не содержание документа. Файлы не открываются из реестра: защищенное хранилище еще не подключено. Одинаковые SHA-256 не удаляются; разные версии пути сохраняются.</p>
-<form class="panel filters" method="get"><label>Поиск по пути<input name="q" value="{{ q }}" maxlength="200"></label><label>Категория<select name="category"><option value="">Все категории</option>{% for c in categories + [unknown, service] %}<option {% if c == category %}selected{% endif %}>{{ c }}</option>{% endfor %}</select></label><label class="checkbox"><input type="checkbox" name="review" value="true" {% if review %}checked{% endif %}>Непроверенные</label><label class="checkbox"><input type="checkbox" name="duplicates" value="true" {% if duplicates %}checked{% endif %}>Точные дубли</label><button>Найти</button></form>
-<section class="panel"><p>Найдено {{ result.total }} · страница {{ result.page }}</p><div class="table-wrap"><table><thead><tr><th>Файл / исходный путь</th><th>Код и ревизия · предположение</th><th>Проверка категории</th></tr></thead><tbody>{% for doc in result['items'] %}<tr><td><b>#{{ doc.id }} · {{ doc.name }}</b><small class="path">{{ doc.path }}</small><small>{{ doc.size }} байт · SHA-256: <code title="{{ doc.sha256 }}">{{ doc.sha256[:16] }}…</code></small></td><td>{{ doc.project_code or 'Не определен' }}<small>Ревизия: {{ doc.revision if doc.revision is not none else 'не определена' }}</small></td><td><span class="badge {{ 'pending' if not doc.reviewed else '' }}">{{ 'Категория проверена' if doc.reviewed else 'Предложение, не проверено' }}</span><form data-request="/api/projects/{{ project.id }}/documents/{{ doc.id }}" data-method="PATCH" data-json="true"><input type="hidden" name="version" value="{{ doc.version }}"><select name="category" aria-label="Категория {{ doc.name }}">{% for c in categories + [unknown, service] %}<option {% if c == doc.category %}selected{% endif %}>{{ c }}</option>{% endfor %}</select><small>{{ doc.reason }}</small><button class="compact">Подтвердить категорию</button><p class="form-message" role="status"></p></form></td></tr>{% else %}<tr><td colspan="3">Файлов по этому фильтру нет. Сначала подтвердите импорт ZIP.</td></tr>{% endfor %}</tbody></table></div><div class="pagination">{% if result.page > 1 %}<a href="{{ request.url.include_query_params(page=result.page-1) }}">← Предыдущая</a>{% endif %}{% if result.page * result.page_size < result.total %}<a href="{{ request.url.include_query_params(page=result.page+1) }}">Следующая →</a>{% endif %}</div></section>
+{% extends "base.html" %}
+{% block title %}Реестр · {{ project.name }}{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div>
+    <p class="eyebrow">{{ project.code }} / документы</p>
+    <h1>Реестр документов</h1>
+    <p>{{ summary.documents }} файлов · {{ summary.review }} категорий не проверено · {{ summary.duplicate_groups }} групп дублей</p>
+  </div>
+  <a class="button secondary" href="/api/projects/{{ project.id }}/documents.csv">Экспорт CSV</a>
+</header>
+
+<p class="warning">Назначение, код и ревизия определяются только по имени/пути. «Уверенность» ниже — оценка силы правил, не вероятность правильности и не проверка содержания документа. Файлы пока не открываются из реестра. Точные SHA-256 дубли не удаляются автоматически.</p>
+
+<section class="panel review-summary">
+  <div class="row">
+    <div>
+      <p class="eyebrow">Быстрый разбор</p>
+      <h2>Что требует внимания</h2>
+      <p><b>{{ summary.high_pending }}</b> предложений высокой уверенности · <b>{{ summary.medium_pending }}</b> средней · <b>{{ summary.low_pending }}</b> низкой/неопределенной · <b>{{ summary.unknown }}</b> без категории.</p>
+    </div>
+    {% if summary.auto_confirmable %}
+    <form data-request="/api/projects/{{ project.id }}/documents/bulk-review" data-json="true" data-confirm="Подтвердить {{ summary.auto_confirmable }} предложений высокой уверенности? Это подтвердит только неизмененные предложения правил с оценкой не ниже 0.90.">
+      <input type="hidden" name="min_score" value="0.90">
+      <input type="hidden" name="category" value="">
+      <button type="submit">Подтвердить уверенные · {{ summary.auto_confirmable }}</button>
+      <p class="form-message" role="status"></p>
+    </form>
+    {% endif %}
+  </div>
+  <small>Массовое подтверждение не затрагивает «На ручную проверку», служебные файлы, среднюю и низкую уверенность. Проектные шифры без явного контекста остаются на ручной проверке.</small>
+</section>
+
+<form class="panel filters" method="get">
+  <label>Поиск по пути<input name="q" value="{{ q }}" maxlength="200"></label>
+  <label>Категория<select name="category"><option value="">Все категории</option>{% for c in categories + [unknown, service] %}<option {% if c == category %}selected{% endif %}>{{ c }}</option>{% endfor %}</select></label>
+  <label class="checkbox"><input type="checkbox" name="review" value="true" {% if review %}checked{% endif %}>Непроверенные</label>
+  <label class="checkbox"><input type="checkbox" name="duplicates" value="true" {% if duplicates %}checked{% endif %}>Точные дубли</label>
+  <button>Найти</button>
+</form>
+
+{% if duplicates %}
+<section class="panel">
+  <div class="row">
+    <div><h2>Группы точных дублей</h2><p>Найдено групп: {{ duplicate_result.total }} · страница {{ duplicate_result.page }}</p></div>
+    <a class="button secondary compact" href="/projects/{{ project.id }}/documents">Обычный реестр</a>
+  </div>
+  <p class="warning">Внутри одной группы SHA-256 одинаковый: содержимое файлов байт-в-байт совпадает. Разные пути сохраняются, потому что одинаковый файл может находиться в разных разделах или иметь организационное значение.</p>
+  {% for group in duplicate_result.groups %}
+  <article class="duplicate-group">
+    <div class="duplicate-head">
+      <div><b>Группа {{ loop.index + (duplicate_result.page - 1) * duplicate_result.page_size }}</b> · {{ group.count }} копии</div>
+      <code title="{{ group.sha256 }}">SHA-256 {{ group.sha256[:20] }}…</code>
+    </div>
+    <div class="table-wrap"><table class="duplicate-table"><thead><tr><th>Файл / путь</th><th>Категория</th><th>Проверка</th></tr></thead><tbody>
+      {% for doc in group['items'] %}
+      <tr>
+        <td><b>#{{ doc.id }} · {{ doc.name }}</b><small class="path">{{ doc.path }}</small><small>{{ doc.size }} байт</small></td>
+        <td>{{ doc.category }}<small>{{ doc.reason }}</small></td>
+        <td><span class="badge confidence-{{ doc.confidence_level }}">{{ doc.confidence_text }} · {{ '%.2f'|format(doc.score) }}</span><small>{{ 'Категория проверена человеком' if doc.reviewed else 'Категория еще не подтверждена' }}</small></td>
+      </tr>
+      {% endfor %}
+    </tbody></table></div>
+  </article>
+  {% else %}
+  <div class="empty"><h2>Точных дублей по этому фильтру нет</h2></div>
+  {% endfor %}
+  <div class="pagination">
+    {% if duplicate_result.page > 1 %}<a href="{{ request.url.include_query_params(page=duplicate_result.page-1) }}">← Предыдущая</a>{% endif %}
+    {% if duplicate_result.page * duplicate_result.page_size < duplicate_result.total %}<a href="{{ request.url.include_query_params(page=duplicate_result.page+1) }}">Следующая →</a>{% endif %}
+  </div>
+</section>
+{% else %}
+<section class="panel">
+  <p>Найдено {{ result.total }} · страница {{ result.page }}</p>
+  <div class="table-wrap"><table><thead><tr><th>Файл / исходный путь</th><th>Код и ревизия · предположение</th><th>Проверка категории</th></tr></thead><tbody>
+    {% for doc in result['items'] %}
+    <tr>
+      <td><b>#{{ doc.id }} · {{ doc.name }}</b><small class="path">{{ doc.path }}</small><small>{{ doc.size }} байт · SHA-256: <code title="{{ doc.sha256 }}">{{ doc.sha256[:16] }}…</code></small></td>
+      <td>{{ doc.project_code or 'Не определен' }}<small>Ревизия: {{ doc.revision if doc.revision is not none else 'не определена' }}</small><span class="badge confidence-{{ doc.confidence_level }}">{{ doc.confidence_text }} уверенность правил · {{ '%.2f'|format(doc.score) }}</span></td>
+      <td>
+        <span class="badge {{ 'pending' if not doc.reviewed else '' }}">{{ 'Категория проверена' if doc.reviewed else 'Предложение, не проверено' }}</span>
+        <form data-request="/api/projects/{{ project.id }}/documents/{{ doc.id }}" data-method="PATCH" data-json="true">
+          <input type="hidden" name="version" value="{{ doc.version }}">
+          <select name="category" aria-label="Категория {{ doc.name }}">{% for c in categories + [unknown, service] %}<option {% if c == doc.category %}selected{% endif %}>{{ c }}</option>{% endfor %}</select>
+          <small>{{ doc.reason }}</small>
+          <button class="compact">Подтвердить категорию</button><p class="form-message" role="status"></p>
+        </form>
+      </td>
+    </tr>
+    {% else %}<tr><td colspan="3">Файлов по этому фильтру нет. Сначала подтвердите импорт ZIP.</td></tr>{% endfor %}
+  </tbody></table></div>
+  <div class="pagination">
+    {% if result.page > 1 %}<a href="{{ request.url.include_query_params(page=result.page-1) }}">← Предыдущая</a>{% endif %}
+    {% if result.page * result.page_size < result.total %}<a href="{{ request.url.include_query_params(page=result.page+1) }}">Следующая →</a>{% endif %}
+  </div>
+</section>
+{% endif %}
 {% endblock %}
