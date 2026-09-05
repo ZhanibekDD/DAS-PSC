@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Работы и замечания · {{ project.name }}{% endblock %}
+{% macro stage_form(s={}) %}
+<form data-request="/api/projects/{{ project.id }}/stages{{ '/' ~ s.id if s.id else '' }}" data-method="{{ 'PATCH' if s.id else 'POST' }}" data-json="true" data-stage="true">
+  {% if s.id %}<input type="hidden" name="version" value="{{ s.version }}">{% endif %}
+  <div class="form-grid">
+    <label>Что делаем?<input name="name" value="{{ s.get('name','') }}" required maxlength="200" placeholder="Например: Сварка в линию"></label>
+    <label>Где?<input name="location" value="{{ s.get('location','') }}" maxlength="200" placeholder="Участок, пикеты или зона"></label>
+    <label>Ответственный<input name="responsible" value="{{ s.get('responsible','') }}" required maxlength="200"></label>
+    <label>Статус<select name="status">{% for key,label in stage_states.items() %}<option value="{{ key }}" {% if key == s.get('status','planned') %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    <label>Готовность, %<input type="number" name="progress" value="{{ s.get('progress',0) }}" min="0" max="100" step="1" required></label>
+    <label>Плановый срок<input type="date" name="due_date" value="{{ s.get('due_date','') }}"></label>
+  </div>
+  {% if s.id %}<details class="inline-advanced"><summary>Дополнительные поля</summary><div class="form-grid"><label>Предшествующий этап<select name="predecessor_id"><option value="">Нет зависимости</option>{% for p in stages if p.id != s.get('id') %}<option value="{{ p.id }}" {% if p.id == s.get('predecessor_id') %}selected{% endif %}>#{{ p.id }} · {{ p.name }} · {{ p.location }}</option>{% endfor %}</select></label><label>Плановое начало<input type="date" name="start_date" value="{{ s.get('start_date','') }}"></label><label>ID связанного документа<input type="number" name="document_id" value="{{ s.get('document_id') or '' }}" min="1" step="1" placeholder="Необязательно"></label><label>Примечание<textarea name="note" maxlength="2000" rows="2">{{ s.get('note','') }}</textarea></label></div></details>{% endif %}
+  <button>{{ 'Сохранить этап' if s.id else 'Добавить этап' }}</button><p class="form-message" role="status"></p>
+</form>
+{% endmacro %}
+{% macro issue_form(i={}) %}
+<form data-request="/api/projects/{{ project.id }}/prescriptions{{ '/' ~ i.id if i.id else '' }}" data-method="{{ 'PATCH' if i.id else 'POST' }}" data-json="true" data-issue="true">
+  {% if i.id %}<input type="hidden" name="version" value="{{ i.version }}">{% endif %}
+  <div class="form-grid">
+    <label>Что не так?<input name="title" value="{{ i.get('title','') }}" maxlength="200" required placeholder="Коротко опишите замечание"></label>
+    <label>Кто исправляет?<input name="responsible" value="{{ i.get('responsible','') }}" maxlength="200" required></label>
+    <label>Срок<input type="date" name="due_date" value="{{ i.get('due_date','') }}" required></label>
+    <label>Статус<select name="status">{% for key,label in issue_states.items() %}<option value="{{ key }}" {% if key == i.get('status','open') %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+  </div>
+  <label>Описание<textarea name="description" maxlength="4000" rows="3">{{ i.get('description','') }}</textarea></label>
+  <label>Что сделали для устранения<textarea name="resolution" maxlength="4000" rows="3">{{ i.get('resolution','') }}</textarea></label>
+  <label class="checkbox"><input type="checkbox" name="blocking" {% if i.get('blocking') %}checked{% endif %}>Блокирует этап работ</label>
+  {% if i.id %}<details class="inline-advanced"><summary>Дополнительные поля</summary><div class="form-grid"><label>Связанный этап<select name="stage_id"><option value="">Весь объект</option>{% for s in stages %}<option value="{{ s.id }}" {% if s.id == i.get('stage_id') %}selected{% endif %}>#{{ s.id }} · {{ s.name }}</option>{% endfor %}</select></label><label>ID подтверждающего документа<input type="number" name="document_id" value="{{ i.get('document_id') or '' }}" min="1" step="1"></label><label>Кто проверил<input name="verified_by" value="{{ i.get('verified_by','') }}" maxlength="200" placeholder="Для закрытия"></label></div></details>{% endif %}
+  <button>{{ 'Сохранить предписание' if i.id else 'Добавить предписание' }}</button><p class="form-message" role="status"></p>
+</form>
+{% endmacro %}
+{% block content %}
+<header class="object-header compact-header">
+  <div><a class="back-link" href="/projects/{{ project.id }}">← Обзор объекта</a><span class="project-code">{{ project.code }}</span><h1>Работы и замечания</h1><p>Здесь только то, что нужно контролировать: этапы, ответственные, сроки и замечания.</p></div>
+  <div class="header-actions"><a class="button secondary" href="#new-stage">+ Этап</a><a class="button" href="#new-issue">+ Замечание</a></div>
+</header>
+
+<section class="status-summary control-summary-bar">
+  <span><b>{{ control.stages }}</b><small>этапов</small></span>
+  <span><b>{{ control.done_stages }}</b><small>завершено</small></span>
+  <span class="{{ 'summary-warning' if control.open_issues else '' }}"><b>{{ control.open_issues }}</b><small>замечаний открыто</small></span>
+  <span class="{{ 'summary-danger' if control.overdue_issues else '' }}"><b>{{ control.overdue_issues }}</b><small>просрочено</small></span>
+  <span class="{{ 'summary-warning' if control.attention_stages else '' }}"><b>{{ control.attention_stages }}</b><small>этапов требуют внимания</small></span>
+</section>
+
+<section class="control-columns">
+  <section class="panel control-section">
+    <div class="section-head"><div><span class="kicker">Работы</span><h2>Этапы</h2><p>Что сейчас делается на объекте и кто отвечает.</p></div><a class="text-link" href="#new-stage">Добавить →</a></div>
+    <div class="control-list">
+    {% for s in stages %}
+      <article class="work-card {{ 'needs-attention' if s.attention else '' }}" id="stage-{{ s.id }}">
+        <div class="work-card-head"><div><span class="pill badge {{ 'pill-ok' if s.status == 'done' else 'pill-wait' }}">{{ stage_states[s.status] }} · {{ s.progress }}% вручную</span><h3>{{ s.name }}</h3><p>{{ s.location or 'Участок не указан' }}</p></div><strong class="progress-number">{{ s.progress }}%</strong></div>
+        <div class="work-meta"><span><b>Ответственный:</b> {{ s.responsible }}</span><span><b>Срок:</b> {{ s.due_date or 'не указан' }}{% if s.overdue %} · <b class="danger-text">просрочен</b>{% endif %}</span></div>
+        {% if s.blocking_issues %}<div class="inline-alert danger"><b>Блокирующих замечаний: {{ s.blocking_issues }}</b><span>Если этап уже завершен, это отдельное противоречие для проверки.</span></div>{% endif %}
+        <details><summary>Изменить этап</summary>{{ stage_form(s) }}</details>
+      </article>
+    {% else %}<div class="empty-inline">Этапов нет. Добавьте первый, когда появится что контролировать.</div>{% endfor %}
+    </div>
+  </section>
+
+  <section class="panel control-section" id="issues">
+    <div class="section-head"><div><span class="kicker">Замечания</span><h2>Что нужно исправить</h2><p>Открыто → исправляется → на проверке → закрыто.</p></div><a class="text-link" href="#new-issue">Добавить →</a></div>
+    <form class="filters compact-filter" method="get" action="/projects/{{ project.id }}/control#issues"><label>Статус<select name="status"><option value="">Все</option>{% for key,label in issue_states.items() %}<option value="{{ key }}" {% if status == key %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label><label class="checkbox"><input type="checkbox" name="overdue" value="true" {% if overdue %}checked{% endif %}>Только просроченные</label><button>Показать</button></form>
+    <div class="control-list">
+    {% for i in issues['items'] %}
+      <article class="work-card {{ 'needs-attention' if i.status != 'closed' else '' }}" id="issue-{{ i.id }}">
+        <div class="work-card-head"><div><span class="pill badge {{ 'pill-ok' if i.status == 'closed' else 'pill-wait' }}">{{ issue_states[i.status] }}</span><h3>{{ i.title }}</h3><p>{{ i.responsible }} · до {{ i.due_date }}{% if i.overdue %} · <b class="danger-text">просрочено</b>{% endif %}</p></div>{% if i.blocking %}<span class="pill pill-ocr">Блокирует</span>{% endif %}</div>
+        {% if i.description %}<p class="preserve-lines issue-description">{{ i.description }}</p>{% endif %}
+        {% if i.resolution %}<div class="resolution"><b>Что сделано:</b> {{ i.resolution }}</div>{% endif %}
+        <details><summary>Изменить / проверить предписание</summary>{{ issue_form(i) }}</details>
+      </article>
+    {% else %}<div class="empty-inline">По этому фильтру замечаний нет.</div>{% endfor %}
+    </div>
+    <div class="pagination">{% if issues.page > 1 %}<a href="{{ request.url.include_query_params(page=issues.page-1) }}#issues">← Назад</a>{% endif %}{% if issues.page * issues.page_size < issues.total %}<a href="{{ request.url.include_query_params(page=issues.page+1) }}#issues">Дальше →</a>{% endif %}</div>
+  </section>
+</section>
+
+<section class="control-create-grid">
+  <section class="panel" id="new-stage"><details><summary>+ Добавить этап работ</summary>{{ stage_form() }}</details></section>
+  <section class="panel" id="new-issue"><details><summary>+ Добавить предписание</summary>{{ issue_form() }}</details></section>
+</section>
+
+<section class="panel"><details class="advanced-block"><summary>Как работает контроль?</summary><p class="hint">Проценты и статусы вводятся человеком. ПСК не определяет фактическую готовность стройки сам и не выдаёт допуск к работам. Он помогает не потерять сроки, зависимости и замечания.</p></details></section>
+{% endblock %}

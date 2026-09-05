@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Импорт документов · ПСК{% endblock %}
+{% block content %}
+<header class="object-header compact-header">
+  <div><a class="back-link" href="/projects/{{ project.id }}">← Обзор объекта</a><span class="project-code">{{ project.code }}</span><h1>Импорт документов</h1><p>{{ job.source }}</p></div>
+  <span class="pill {{ 'pill-ok' if job.status == 'confirmed' else 'pill-wait' }}">{{ {'pending':'Анализ завершён','confirmed':'Сохранено','cancelled':'Отменено'}[job.status] }}</span>
+</header>
+
+<section class="stepper">
+  <article class="done"><span>1</span><div><b>Загрузка</b><small>Архив получен</small></div></article>
+  <article class="done"><span>2</span><div><b>Анализ</b><small>{{ job.analysis.file_count }} файлов проверено</small></div></article>
+  <article class="{{ 'done' if job.status == 'confirmed' else 'active' }}"><span>3</span><div><b>Сохранение</b><small>{{ 'Готово' if job.status == 'confirmed' else 'Нужно подтвердить' }}</small></div></article>
+</section>
+
+<section class="result-summary">
+  <div class="result-title"><div class="completion-mark">✓</div><div><span class="kicker">Результат анализа</span><h2>Архив разобран</h2><p>Ниже только итог: что удалось прочитать автоматически и что потребует дополнительной проверки.</p></div></div>
+  <section class="status-summary import-summary">
+    <span><b>{{ job.analysis.file_count }}</b><small>файлов</small></span>
+    <span><b>{{ job.analysis.content_text_files|default(0) }}</b><small>текст прочитан</small></span>
+    <span class="{{ 'summary-warning' if job.analysis.content_needs_ocr|default(0) else '' }}"><b>{{ job.analysis.content_needs_ocr|default(0) }}</b><small>нужен OCR</small></span>
+    <span class="{{ 'summary-warning' if job.analysis.review_count else '' }}"><b>{{ job.analysis.review_count }}</b><small>категория неясна</small></span>
+  </section>
+</section>
+
+{% if job.status == 'pending' %}
+<section class="next-action primary-action">
+  <div class="action-number">3</div>
+  <div><span class="kicker">Последний шаг</span><h2>Сохранить результат в объект</h2><p>ПСК сохранит реестр и производные результаты анализа. Сам ZIP и извлечённый текст в базе не сохраняются.</p></div>
+  <div class="stack-actions"><form data-request="/api/projects/{{ project.id }}/imports/{{ job.id }}/confirm"><button>Подтвердить и сохранить реестр</button><p class="form-message" role="status"></p></form><form data-request="/api/projects/{{ project.id }}/imports/{{ job.id }}/cancel"><button class="secondary">Отменить импорт</button><p class="form-message" role="status"></p></form></div>
+</section>
+{% elif job.status == 'confirmed' %}
+<section class="next-action success-action"><div class="action-number">✓</div><div><span class="kicker">Готово</span><h2>Результаты сохранены</h2><p>Теперь можно перейти к очереди проверки документов.</p></div><a class="button" href="/projects/{{ project.id }}/documents?review=true">Открыть документы</a></section>
+{% endif %}
+
+{% if job.status == 'confirmed' and job.refresh and (job.refresh.analysis_updates or job.refresh.changed) %}
+<section class="next-action rule-refresh">
+  <div class="action-number">↻</div>
+  <div><span class="kicker">Повторный анализ того же ZIP</span><h2>Есть уточнения для существующего реестра</h2><p>Совпало {{ job.refresh.matched }} документов. Анализ обновится у {{ job.refresh.analysis_updates }}. Машинное предложение изменится у {{ job.refresh.changed }}. Защищено человеком: {{ job.refresh.protected }}.</p><details><summary>Показать примеры изменений</summary>{% if job.refresh.samples %}<div class="simple-change-list">{% for item in job.refresh.samples %}<div><b>{{ item.name }}</b><span>{{ item.from_category }} → {{ item.to_category }}</span></div>{% endfor %}</div>{% else %}<p>Категории не меняются — обновятся только результаты анализа.</p>{% endif %}</details></div>
+  <form data-request="/api/projects/{{ project.id }}/imports/{{ job.id }}/refresh" data-json="true" data-confirm="Применить результаты анализа к существующему реестру? Подтвержденные человеком записи не будут изменены."><input type="hidden" name="expected_token" value="{{ job.refresh.token }}"><button>Применить анализ содержания</button><p class="form-message" role="status"></p></form>
+</section>
+{% endif %}
+
+<section class="panel">
+  <details class="advanced-block" {% if job.status == 'pending' %}open{% endif %}>
+    <summary>Что ПСК увидел в документах <span>страница {{ page }}</span></summary>
+    <div class="analysis-list">
+    {% for row in rows %}
+      {% set ca=row.content_analysis|default({}) %}
+      <article class="analysis-row">
+        <div class="analysis-file"><b>{{ row.name if row.name is defined else row.path.split('/')[-1] }}</b><small class="path">{{ row.path }}</small></div>
+        <div><span class="pill">{{ row.classification.category }}</span></div>
+        <div>{% if ca.status == 'text' %}<span class="pill pill-text">Текст прочитан</span><small>{{ ca.text_chars }} символов{% if ca.pages %} · {{ ca.pages }} стр.{% endif %}</small>{% elif ca.needs_ocr %}<span class="pill pill-ocr">Нужен OCR</span><small>Это PDF-скан</small>{% elif ca.status == 'no_text' %}<span class="pill pill-wait">Текст не найден</span>{% elif ca.status in ['error','timeout','encrypted','too_large'] %}<span class="pill pill-wait">Не прочитан</span><small>{{ ca.reason }}</small>{% else %}<span class="muted">Без чтения содержимого</span>{% endif %}</div>
+      </article>
+    {% endfor %}
+    </div>
+    <div class="pagination">{% if page > 1 %}<a href="?page={{ page-1 }}">← Назад</a>{% endif %}{% if page*100 < job.analysis.file_count %}<a href="?page={{ page+1 }}">Дальше →</a>{% endif %}</div>
+  </details>
+</section>
+
+<section class="panel"><details class="advanced-block"><summary>Техническая информация</summary><p class="hint">Групп точных дублей: {{ job.analysis.duplicate_groups|length }}. Размер после распаковки: {{ (job.analysis.total_uncompressed_size/1048576)|round(1) }} МиБ. ПСК хранит только реестр и производные результаты; исходные файлы не перемещает и не удаляет.</p></details></section>
+{% endblock %}

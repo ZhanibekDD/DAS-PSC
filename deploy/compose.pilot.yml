@@ -1,0 +1,45 @@
+# Standalone file: NEVER merge with a DAS/procurement/AI Compose file.
+name: das-psc-pilot
+services:
+  psc:
+    image: "${PSC_IMAGE:?Use the verified local image ID}"
+    pull_policy: never
+    runtime: runc
+    user: "10001:10001"
+    init: true
+    restart: "on-failure:3"
+    cpus: 1.0
+    mem_limit: 1g
+    memswap_limit: 1g
+    pids_limit: 128
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    ports:
+      - "127.0.0.1:${PSC_PORT:-18090}:8080"
+    environment:
+      PSC_PASSWORD: "${PSC_PASSWORD:?A private pilot password is required}"
+      PSC_DATA_DIR: /data
+      PSC_ALLOWED_HOSTS: localhost,127.0.0.1
+      PSC_TIMEZONE: "${PSC_TIMEZONE:-UTC}"
+      NVIDIA_VISIBLE_DEVICES: void
+      CUDA_VISIBLE_DEVICES: "-1"
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--no-proxy-headers", "--workers", "1", "--limit-concurrency", "4"]
+    volumes:
+      - psc_data:/data
+    tmpfs:
+      - /tmp:size=320m,mode=1777,noexec,nosuid,nodev
+    networks: [psc_only]
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    stop_grace_period: 30s
+networks:
+  psc_only:
+    # A normal dedicated bridge is needed for localhost port publishing.
+    # It is NOT an outbound firewall; no other service joins this network.
+    driver: bridge
+volumes:
+  psc_data:
