@@ -1,7 +1,31 @@
 <!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{% block title %}DAS-PSC{% endblock %}</title><link rel="stylesheet" href="/static/app.css?v={{ app_version }}-ux2"><link rel="stylesheet" href="/static/control.css?v={{ app_version }}-ux2"><link rel="stylesheet" href="/static/progress.css?v={{ app_version }}-ux2"><script src="/static/app.js?v={{ app_version }}-ux2" defer></script></head>
-<body><aside class="sidebar"><a class="brand" href="/">DAS<span>PSC</span></a><small>Проектно-строительный контроль</small>
-<nav><a href="/">Объекты</a>{% if project is defined %}<a href="/projects/{{ project.id }}">Паспорт объекта</a><a href="/projects/{{ project.id }}/documents">Документы</a><a href="/projects/{{ project.id }}#coverage">Разделы документации</a><a href="/projects/{{ project.id }}#upload">Импорт ZIP</a><a href="/projects/{{ project.id }}/control">Ход работ и предписания</a>{% endif %}</nav>
-<div class="sidebar-footer">v{{ app_version }} · пилот<br>Исходники не перемещаются<br>Классификация по правилам</div></aside>
-<main class="main">{% block content %}{% endblock %}</main><div id="notice" class="notice" role="status" aria-live="polite" hidden></div></body></html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}ПСК{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css?v={{ app_version }}-simple1">
+  <link rel="stylesheet" href="/static/control.css?v={{ app_version }}-simple1">
+  <link rel="stylesheet" href="/static/progress.css?v={{ app_version }}-simple1">
+  <script src="/static/app.js?v={{ app_version }}-simple1" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="/"><span class="brand-mark">ПСК</span><span class="brand-text">Контроль стройки</span></a>
+    <nav class="main-nav" aria-label="Основная навигация">
+      <a href="/">Объекты</a>
+      {% if project is defined %}
+      <a href="/projects/{{ project.id }}">Обзор</a>
+      <a href="/projects/{{ project.id }}/documents">Документы</a>
+      <a href="/projects/{{ project.id }}/control">Работы и замечания</a>
+      {% endif %}
+    </nav>
+    <div class="topbar-version">v{{ app_version }}</div>
+  </div>
+</header>
+<main class="main">{% block content %}{% endblock %}</main>
+<footer class="footer"><span>ПСК помогает собрать документы, найти пробелы и контролировать работы.</span><span>Исходные файлы не перемещаются.</span></footer>
+<div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+</body>
+</html>
