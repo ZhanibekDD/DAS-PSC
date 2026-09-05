@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}DAS-PSC{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark">P</span><div><strong>DAS-PSC</strong><small>Проектно-строительный контроль</small></div></div>
+    <nav>
+      <a class="active" href="/">Объекты</a>
+      <a href="/projects/demo">Карточка объекта</a>
+      <span>Документы</span>
+      <span>Комплектность</span>
+      <span>Ход строительства</span>
+      <span>ИИ-разбор</span>
+    </nav>
+    <div class="sidebar-footer">MVP v0.1</div>
+  </aside>
+  <main class="main">{% block content %}{% endblock %}</main>
+</body>
+</html>
