@@ -10,7 +10,15 @@ from dataclasses import asdict, dataclass
 from pathlib import PurePosixPath
 from typing import BinaryIO
 
-from app.services.classifier import UNKNOWN, classify_path, extract_project_code, extract_revision
+from app.services.classifier import (
+    Classification,
+    UNKNOWN,
+    classify_path,
+    combine_classifications,
+    extract_project_code,
+    extract_revision,
+)
+from app.services.content_analyzer import MAX_CONTENT_FILE, analyze_content
 
 
 class UnsafeArchive(ValueError):
@@ -29,6 +37,7 @@ class Limits:
 
 DEFAULT_LIMITS = Limits()
 HASH_CHUNK = 1024 * 1024
+CONTENT_SUFFIXES = {".pdf", ".docx"}
 
 
 def safe_path(name: str) -> str:
@@ -57,23 +66,64 @@ def hash_stream(stream: BinaryIO, limits: Limits, deadline: float) -> tuple[str,
     return digest.hexdigest(), size
 
 
-def make_row(path: str, size: int, sha: str) -> dict:
-    return {"path": path, "name": PurePosixPath(path).name, "size": size,
-            "sha256": sha, "project_code": extract_project_code(path),
-            "revision": extract_revision(path), "classification": asdict(classify_path(path))}
+def read_content_bytes(stream: BinaryIO, expected_size: int, deadline: float) -> bytes:
+    data = bytearray()
+    while True:
+        if time.monotonic() > deadline:
+            raise UnsafeArchive("Превышено время анализа")
+        chunk = stream.read(HASH_CHUNK)
+        if not chunk:
+            break
+        data.extend(chunk)
+        if len(data) > MAX_CONTENT_FILE:
+            raise UnsafeArchive("Внутренняя ошибка лимита содержательного анализа")
+    if len(data) != expected_size:
+        raise UnsafeArchive("Размер содержимого ZIP изменился между проходами")
+    return bytes(data)
+
+
+def content_classification(payload: dict) -> Classification | None:
+    value = payload.get("classification")
+    if not value:
+        return None
+    return Classification(value["category"], float(value["confidence"]), value["reason"])
+
+
+def make_row(path: str, size: int, sha: str, content: dict) -> dict:
+    path_result = classify_path(path)
+    combined = combine_classifications(path_result, content_classification(content))
+    return {
+        "path": path,
+        "name": PurePosixPath(path).name,
+        "size": size,
+        "sha256": sha,
+        "project_code": extract_project_code(path),
+        "revision": extract_revision(path),
+        "classification": asdict(combined),
+        "path_classification": asdict(path_result),
+        "content_analysis": content,
+    }
 
 
 def summarize(rows: list[dict]) -> dict:
     groups: dict[str, list[str]] = {}
     for row in rows:
         groups.setdefault(row["sha256"], []).append(row["path"])
-    return {"file_count": len(rows), "total_uncompressed_size": sum(r["size"] for r in rows),
-            "review_count": sum(r["classification"]["category"] == UNKNOWN for r in rows),
-            "duplicate_groups": [v for v in groups.values() if len(v) > 1], "files": rows}
+    return {
+        "analysis_version": 1,
+        "file_count": len(rows),
+        "total_uncompressed_size": sum(r["size"] for r in rows),
+        "review_count": sum(r["classification"]["category"] == UNKNOWN for r in rows),
+        "duplicate_groups": [v for v in groups.values() if len(v) > 1],
+        "content_text_files": sum(r["content_analysis"]["status"] == "text" for r in rows),
+        "content_needs_ocr": sum(bool(r["content_analysis"].get("needs_ocr")) for r in rows),
+        "content_errors": sum(r["content_analysis"]["status"] in {"error", "timeout"} for r in rows),
+        "files": rows,
+    }
 
 
 def analyze_zip(file_obj: BinaryIO, limits: Limits = DEFAULT_LIMITS) -> dict:
-    """Streams entries for hashes; never extracts, executes or persists source bytes."""
+    """Streams entries for hashes; content is read only in memory for bounded PDF/DOCX analysis."""
     file_obj.seek(0, 2)
     if file_obj.tell() > limits.max_upload:
         raise UnsafeArchive("Слишком большой ZIP")
@@ -105,6 +155,7 @@ def analyze_zip(file_obj: BinaryIO, limits: Limits = DEFAULT_LIMITS) -> dict:
                 if info.file_size > max(info.compress_size, 1) * limits.max_ratio:
                     raise UnsafeArchive("Подозрительная степень сжатия ZIP")
                 prepared.append((info, path))
+
             rows, actual_total = [], 0
             for info, path in prepared:
                 with archive.open(info) as stream:
@@ -112,7 +163,15 @@ def analyze_zip(file_obj: BinaryIO, limits: Limits = DEFAULT_LIMITS) -> dict:
                 actual_total += size
                 if size != info.file_size or actual_total > limits.max_total:
                     raise UnsafeArchive("Размер содержимого ZIP не соответствует лимитам")
-                rows.append(make_row(path, size, sha))
+
+                suffix = PurePosixPath(path.casefold()).suffix
+                if suffix in CONTENT_SUFFIXES and size <= MAX_CONTENT_FILE:
+                    with archive.open(info) as stream:
+                        raw = read_content_bytes(stream, size, deadline)
+                    content = analyze_content(path, raw, deadline)
+                else:
+                    content = analyze_content(path, b"" if suffix not in CONTENT_SUFFIXES else b"x" * (MAX_CONTENT_FILE + 1), deadline)
+                rows.append(make_row(path, size, sha, content))
             return summarize(rows)
     except (zipfile.BadZipFile, RuntimeError, NotImplementedError, EOFError, zlib.error) as exc:
         raise UnsafeArchive("ZIP поврежден, зашифрован или использует неподдерживаемое сжатие") from exc
