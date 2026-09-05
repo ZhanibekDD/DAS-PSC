@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{% block title %}DAS-PSC{% endblock %}</title><link rel="stylesheet" href="/static/app.css"><link rel="stylesheet" href="/static/control.css"><script src="/static/app.js" defer></script></head>
+<title>{% block title %}DAS-PSC{% endblock %}</title><link rel="stylesheet" href="/static/app.css?v={{ app_version }}-ux2"><link rel="stylesheet" href="/static/control.css?v={{ app_version }}-ux2"><link rel="stylesheet" href="/static/progress.css?v={{ app_version }}-ux2"><script src="/static/app.js?v={{ app_version }}-ux2" defer></script></head>
 <body><aside class="sidebar"><a class="brand" href="/">DAS<span>PSC</span></a><small>Проектно-строительный контроль</small>
 <nav><a href="/">Объекты</a>{% if project is defined %}<a href="/projects/{{ project.id }}">Паспорт объекта</a><a href="/projects/{{ project.id }}/documents">Документы</a><a href="/projects/{{ project.id }}#coverage">Разделы документации</a><a href="/projects/{{ project.id }}#upload">Импорт ZIP</a><a href="/projects/{{ project.id }}/control">Ход работ и предписания</a>{% endif %}</nav>
 <div class="sidebar-footer">v{{ app_version }} · пилот<br>Исходники не перемещаются<br>Классификация по правилам</div></aside>
