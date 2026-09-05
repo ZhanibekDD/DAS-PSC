@@ -1,0 +1,10 @@
+services:
+  psc:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      PSC_DATA_DIR: /data
