@@ -2,6 +2,7 @@
 for (const form of document.querySelectorAll('form[data-request]')) {
   form.addEventListener('submit', async event => {
     event.preventDefault();
+    if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) return;
     const button = form.querySelector('button');
     const message = form.querySelector('.form-message');
     button.disabled = true;
