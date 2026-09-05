@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "das-psc"
-version = "0.3.0"
+version = "0.5.0"
 description = "DAS-PSC: проектно-строительный контроль"
 requires-python = ">=3.11"
 dependencies = [
@@ -12,6 +12,7 @@ dependencies = [
   "uvicorn[standard]>=0.35,<1",
   "jinja2>=3.1.6,<4",
   "python-multipart>=0.0.20,<1",
+  "pypdf>=6.0,<7",
 ]
 
 [project.optional-dependencies]
