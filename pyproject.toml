@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "das-psc"
 version = "0.1.0"
@@ -15,6 +19,10 @@ dev = [
   "pytest>=8.4,<9",
   "httpx>=0.28,<1",
 ]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+exclude = ["tests*", "config*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
