@@ -18,7 +18,7 @@ from app.services.classifier import (
     extract_project_code,
     extract_revision,
 )
-from app.services.content_analyzer import MAX_CONTENT_FILE, analyze_content
+from app.services.content_analyzer import ContentAnalysis, MAX_CONTENT_FILE, analyze_content
 
 
 class UnsafeArchive(ValueError):
@@ -169,8 +169,14 @@ def analyze_zip(file_obj: BinaryIO, limits: Limits = DEFAULT_LIMITS) -> dict:
                     with archive.open(info) as stream:
                         raw = read_content_bytes(stream, size, deadline)
                     content = analyze_content(path, raw, deadline)
+                elif suffix in CONTENT_SUFFIXES:
+                    content = ContentAnalysis(
+                        "too_large",
+                        suffix.lstrip("."),
+                        reason=f"Файл больше {MAX_CONTENT_FILE // (1024 * 1024)} МиБ; содержательный разбор пропущен",
+                    ).as_payload()
                 else:
-                    content = analyze_content(path, b"" if suffix not in CONTENT_SUFFIXES else b"x" * (MAX_CONTENT_FILE + 1), deadline)
+                    content = analyze_content(path, b"", deadline)
                 rows.append(make_row(path, size, sha, content))
             return summarize(rows)
     except (zipfile.BadZipFile, RuntimeError, NotImplementedError, EOFError, zlib.error) as exc:
