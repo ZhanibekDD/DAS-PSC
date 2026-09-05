@@ -1,1 +1,1 @@
-"""DAS-PSC application package."""
+"""DAS-PSC: local-first construction document registry."""

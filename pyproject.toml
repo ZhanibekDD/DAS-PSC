@@ -4,25 +4,25 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "das-psc"
-version = "0.1.0"
+version = "0.2.0"
 description = "DAS-PSC: проектно-строительный контроль"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.116,<1",
   "uvicorn[standard]>=0.35,<1",
-  "jinja2>=3.1,<4",
+  "jinja2>=3.1.6,<4",
   "python-multipart>=0.0.20,<1",
 ]
 
 [project.optional-dependencies]
-dev = [
-  "pytest>=8.4,<9",
-  "httpx>=0.28,<1",
-]
+dev = ["pytest>=8.4,<10", "httpx>=0.28,<1"]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
-exclude = ["tests*", "config*"]
+exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+app = ["templates/*.html", "static/*.css", "static/*.js", "config/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

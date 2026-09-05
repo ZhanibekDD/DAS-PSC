@@ -4,12 +4,16 @@ __pycache__/
 .venv/
 venv/
 .env
+.env.*
+!.env.example
 *.db
-*.sqlite3
+*.sqlite*
+*.db-*
+*.egg-info/
+build/
+dist/
 .DS_Store
 Thumbs.db
-
-# Реальные данные проектов никогда не коммитим
 /data/
 /uploads/
 /nas/
@@ -19,3 +23,6 @@ Thumbs.db
 *.7z
 *.dwg
 *.bak
+*.pdf
+*.docx
+*.xlsx

@@ -1,16 +1,60 @@
 name: CI
 on:
   push:
-    branches: [main, "feat/**"]
+    branches: [main]
   pull_request:
-
+permissions:
+  contents: read
+concurrency:
+  group: psc-ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - run: pip install -e '.[dev]'
+          python-version: ${{ matrix.python }}
+      - run: pip install '.[dev]'
       - run: pytest -q
+      - name: Installed package works outside checkout
+        run: |
+          cd "$(mktemp -d)"
+          python - <<'PY'
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+          from fastapi.testclient import TestClient
+          from app.main import create_app
+          with TemporaryDirectory() as d, TestClient(create_app(Path(d), password='')) as c:
+              assert c.get('/').status_code == 200
+              assert c.get('/static/app.js').status_code == 200
+              p = c.post('/api/projects', json={'name':'Package smoke','code':'SMOKE'}, headers={'X-PSC-Request':'1'}).json()['id']
+              assert c.get('/projects/'+p).status_code == 200
+              assert c.get('/projects/'+p+'/documents').status_code == 200
+          PY
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t psc-ci .
+      - name: Start isolated local container
+        run: |
+          docker run -d --name psc-smoke --read-only --tmpfs /tmp:size=300m --cap-drop ALL -p 127.0.0.1:18080:8080 -v psc-ci-data:/data -e PSC_PASSWORD=synthetic-ci-password psc-ci
+          for i in $(seq 1 30); do curl --fail --silent http://127.0.0.1:18080/health && break || sleep 1; done
+          curl --fail --silent http://127.0.0.1:18080/health
+          python3 - <<'PY'
+          import urllib.request, json, base64
+          headers={'Content-Type':'application/json','X-PSC-Request':'1','Authorization':'Basic '+base64.b64encode(b'psc:synthetic-ci-password').decode()}
+          r=urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:18080/api/projects',data=json.dumps({'name':'Container smoke','code':'CI'}).encode(),headers=headers))
+          p=json.load(r)['id']
+          open('/tmp/psc-project-id','w').write(p)
+          PY
+          docker restart psc-smoke
+          for i in $(seq 1 30); do curl --fail --silent http://127.0.0.1:18080/health && break || sleep 1; done
+          curl --fail --silent -u psc:synthetic-ci-password "http://127.0.0.1:18080/api/projects/$(cat /tmp/psc-project-id)" | python3 -c "import sys,json; assert json.load(sys.stdin)['code']=='CI'"
+      - if: always()
+        run: docker logs psc-smoke || true

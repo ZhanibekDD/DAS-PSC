@@ -1,75 +1,118 @@
 from __future__ import annotations
 
 import hashlib
+import stat
+import time
+import unicodedata
 import zipfile
-from dataclasses import asdict
+import zlib
+from dataclasses import asdict, dataclass
 from pathlib import PurePosixPath
 from typing import BinaryIO
 
-from app.services.classifier import classify_path, extract_project_code, extract_revision
-
-MAX_FILES = 5000
-MAX_SINGLE_FILE = 512 * 1024 * 1024
-MAX_TOTAL_UNCOMPRESSED = 5 * 1024 * 1024 * 1024
-HASH_CHUNK = 1024 * 1024
+from app.services.classifier import UNKNOWN, classify_path, extract_project_code, extract_revision
 
 
 class UnsafeArchive(ValueError):
-    pass
+    """Untrusted input rejected before any registry write."""
 
 
-def _safe_name(name: str) -> bool:
-    p = PurePosixPath(name.replace("\\", "/"))
-    return not p.is_absolute() and ".." not in p.parts
+@dataclass(frozen=True)
+class Limits:
+    max_entries: int = 5000
+    max_upload: int = 256 * 1024 * 1024
+    max_file: int = 256 * 1024 * 1024
+    max_total: int = 1024 * 1024 * 1024
+    max_ratio: int = 1000
+    max_seconds: float = 60
 
 
-def _sha256_entry(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> str:
-    digest = hashlib.sha256()
-    with archive.open(info, "r") as stream:
-        while chunk := stream.read(HASH_CHUNK):
-            digest.update(chunk)
-    return digest.hexdigest()
+DEFAULT_LIMITS = Limits()
+HASH_CHUNK = 1024 * 1024
 
 
-def analyze_zip(file_obj: BinaryIO) -> dict:
+def safe_path(name: str) -> str:
+    value = unicodedata.normalize("NFC", name.replace("\\", "/"))
+    path = PurePosixPath(value)
+    if (not value or len(value) > 1024 or value.startswith("/") or
+            any(ord(c) < 32 or ord(c) == 127 for c in value) or ":" in value or
+            ".." in path.parts or not path.parts or
+            any(part.endswith((" ", ".")) for part in path.parts)):
+        raise UnsafeArchive("Небезопасный путь в источнике")
+    return str(path)
+
+
+def hash_stream(stream: BinaryIO, limits: Limits, deadline: float) -> tuple[str, int]:
+    digest, size = hashlib.sha256(), 0
+    while True:
+        if time.monotonic() > deadline:
+            raise UnsafeArchive("Превышено время анализа")
+        chunk = stream.read(HASH_CHUNK)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > limits.max_file:
+            raise UnsafeArchive("Превышен размер файла")
+        digest.update(chunk)
+    return digest.hexdigest(), size
+
+
+def make_row(path: str, size: int, sha: str) -> dict:
+    return {"path": path, "name": PurePosixPath(path).name, "size": size,
+            "sha256": sha, "project_code": extract_project_code(path),
+            "revision": extract_revision(path), "classification": asdict(classify_path(path))}
+
+
+def summarize(rows: list[dict]) -> dict:
+    groups: dict[str, list[str]] = {}
+    for row in rows:
+        groups.setdefault(row["sha256"], []).append(row["path"])
+    return {"file_count": len(rows), "total_uncompressed_size": sum(r["size"] for r in rows),
+            "review_count": sum(r["classification"]["category"] == UNKNOWN for r in rows),
+            "duplicate_groups": [v for v in groups.values() if len(v) > 1], "files": rows}
+
+
+def analyze_zip(file_obj: BinaryIO, limits: Limits = DEFAULT_LIMITS) -> dict:
+    """Streams entries for hashes; never extracts, executes or persists source bytes."""
+    file_obj.seek(0, 2)
+    if file_obj.tell() > limits.max_upload:
+        raise UnsafeArchive("Слишком большой ZIP")
     file_obj.seek(0)
-    with zipfile.ZipFile(file_obj) as archive:
-        infos = [i for i in archive.infolist() if not i.is_dir()]
-        if len(infos) > MAX_FILES:
-            raise UnsafeArchive(f"слишком много файлов: {len(infos)}")
-
-        total_size = sum(i.file_size for i in infos)
-        if total_size > MAX_TOTAL_UNCOMPRESSED:
-            raise UnsafeArchive("слишком большой распакованный размер архива")
-        if any(i.file_size > MAX_SINGLE_FILE for i in infos):
-            raise UnsafeArchive("в архиве есть слишком большой отдельный файл")
-        if any(not _safe_name(i.filename) for i in infos):
-            raise UnsafeArchive("обнаружен небезопасный путь внутри ZIP")
-
-        rows = []
-        hashes: dict[str, list[str]] = {}
-        for info in infos:
-            classification = classify_path(info.filename)
-            sha = _sha256_entry(archive, info)
-            hashes.setdefault(sha, []).append(info.filename)
-            rows.append(
-                {
-                    "path": info.filename,
-                    "name": PurePosixPath(info.filename).name,
-                    "size": info.file_size,
-                    "sha256": sha,
-                    "project_code": extract_project_code(info.filename),
-                    "revision": extract_revision(info.filename),
-                    "classification": asdict(classification),
-                }
-            )
-
-        duplicate_groups = [paths for paths in hashes.values() if len(paths) > 1]
-        review_count = sum(r["classification"]["category"] == "На ручную проверку" for r in rows)
-        return {
-            "file_count": len(rows),
-            "total_uncompressed_size": total_size,
-            "review_count": review_count,
-            "duplicate_groups": duplicate_groups,
-            "files": rows,
-        }
+    deadline = time.monotonic() + limits.max_seconds
+    try:
+        with zipfile.ZipFile(file_obj) as archive:
+            all_infos = archive.infolist()
+            if len(all_infos) > limits.max_entries:
+                raise UnsafeArchive("Слишком много элементов ZIP")
+            prepared, seen, total = [], set(), 0
+            for info in all_infos:
+                path = safe_path(info.orig_filename)
+                mode = stat.S_IFMT(info.external_attr >> 16)
+                if mode not in {0, stat.S_IFREG, stat.S_IFDIR}:
+                    raise UnsafeArchive("Ссылки и специальные файлы в ZIP запрещены")
+                if info.flag_bits & 1:
+                    raise UnsafeArchive("Зашифрованные ZIP не поддерживаются")
+                if info.is_dir():
+                    continue
+                if mode == stat.S_IFDIR:
+                    raise UnsafeArchive("Некорректный тип ZIP-элемента")
+                if path in seen:
+                    raise UnsafeArchive("Повторяющийся нормализованный путь внутри ZIP")
+                seen.add(path)
+                total += info.file_size
+                if info.file_size > limits.max_file or total > limits.max_total:
+                    raise UnsafeArchive("Превышен распакованный размер ZIP")
+                if info.file_size > max(info.compress_size, 1) * limits.max_ratio:
+                    raise UnsafeArchive("Подозрительная степень сжатия ZIP")
+                prepared.append((info, path))
+            rows, actual_total = [], 0
+            for info, path in prepared:
+                with archive.open(info) as stream:
+                    sha, size = hash_stream(stream, limits, deadline)
+                actual_total += size
+                if size != info.file_size or actual_total > limits.max_total:
+                    raise UnsafeArchive("Размер содержимого ZIP не соответствует лимитам")
+                rows.append(make_row(path, size, sha))
+            return summarize(rows)
+    except (zipfile.BadZipFile, RuntimeError, NotImplementedError, EOFError, zlib.error) as exc:
+        raise UnsafeArchive("ZIP поврежден, зашифрован или использует неподдерживаемое сжатие") from exc
