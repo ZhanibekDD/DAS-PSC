@@ -10,6 +10,7 @@ services:
       PSC_DATA_DIR: /data
       PSC_PASSWORD: "${PSC_PASSWORD:?Set PSC_PASSWORD in .env (at least 12 characters)}"
       PSC_ALLOWED_HOSTS: "${PSC_ALLOWED_HOSTS:-localhost,127.0.0.1}"
+      PSC_TIMEZONE: "${PSC_TIMEZONE:-UTC}"
     read_only: true
     tmpfs:
       - /tmp:size=300m,mode=1777

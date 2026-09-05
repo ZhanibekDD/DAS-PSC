@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Ход работ и предписания · {{ project.name }}{% endblock %}
+{% macro stage_form(s={}) %}
+<form data-request="/api/projects/{{ project.id }}/stages{{ '/' ~ s.id if s.id else '' }}" data-method="{{ 'PATCH' if s.id else 'POST' }}" data-json="true" data-stage="true">
+  {% if s.id %}<input type="hidden" name="version" value="{{ s.version }}">{% endif %}
+  <div class="form-grid">
+    <label>Вид работ<input name="name" value="{{ s.get('name','') }}" required maxlength="200" placeholder="Например: Сварка в линию"></label>
+    <label>Участок / пикеты<input name="location" value="{{ s.get('location','') }}" maxlength="200" placeholder="Например: ПК 0+00 — ПК 2+00"></label>
+    <label>Ответственный<input name="responsible" value="{{ s.get('responsible','') }}" required maxlength="200"></label>
+    <label>Предшествующий этап<select name="predecessor_id"><option value="">Нет зависимости</option>{% for p in stages if p.id != s.get('id') %}<option value="{{ p.id }}" {% if p.id == s.get('predecessor_id') %}selected{% endif %}>#{{ p.id }} · {{ p.name }} · {{ p.location }}</option>{% endfor %}</select></label>
+    <label>Плановое начало<input type="date" name="start_date" value="{{ s.get('start_date','') }}"></label>
+    <label>Плановое окончание<input type="date" name="due_date" value="{{ s.get('due_date','') }}"></label>
+    <label>Статус<select name="status">{% for key,label in stage_states.items() %}<option value="{{ key }}" {% if key == s.get('status','planned') %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    <label>Выполнено, % · ввод вручную<input type="number" name="progress" value="{{ s.get('progress',0) }}" min="0" max="100" step="1" required></label>
+    <label>ID связанного документа<input type="number" name="document_id" value="{{ s.get('document_id') or '' }}" min="1" step="1" placeholder="ID из реестра, необязательно"></label>
+    <label>Примечание / причина блокировки<textarea name="note" maxlength="2000" rows="2">{{ s.get('note','') }}</textarea></label>
+  </div>
+  <button>{{ 'Сохранить этап' if s.id else 'Добавить этап' }}</button><p class="form-message" role="status" aria-live="polite"></p>
+</form>
+{% endmacro %}
+{% macro issue_form(i={}) %}
+<form data-request="/api/projects/{{ project.id }}/prescriptions{{ '/' ~ i.id if i.id else '' }}" data-method="{{ 'PATCH' if i.id else 'POST' }}" data-json="true" data-issue="true">
+  {% if i.id %}<input type="hidden" name="version" value="{{ i.version }}">{% endif %}
+  <div class="form-grid">
+    <label>Предписание / замечание<input name="title" value="{{ i.get('title','') }}" maxlength="200" required></label>
+    <label>Ответственный за устранение<input name="responsible" value="{{ i.get('responsible','') }}" maxlength="200" required></label>
+    <label>Срок устранения<input type="date" name="due_date" value="{{ i.get('due_date','') }}" required></label>
+    <label>Этап<select name="stage_id"><option value="">Весь объект</option>{% for s in stages %}<option value="{{ s.id }}" {% if s.id == i.get('stage_id') %}selected{% endif %}>#{{ s.id }} · {{ s.name }} · {{ s.location }}</option>{% endfor %}</select></label>
+    <label>Описание<textarea name="description" maxlength="4000" rows="3">{{ i.get('description','') }}</textarea></label>
+    <label>Что сделано для устранения<textarea name="resolution" maxlength="4000" rows="3">{{ i.get('resolution','') }}</textarea></label>
+    <label>Статус<select name="status">{% for key,label in issue_states.items() %}<option value="{{ key }}" {% if key == i.get('status','open') %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    <label>ID подтверждающего документа<input type="number" name="document_id" value="{{ i.get('document_id') or '' }}" min="1" step="1" placeholder="ID из реестра"></label>
+    <label>Проверивший · ввод вручную<input name="verified_by" value="{{ i.get('verified_by','') }}" maxlength="200" placeholder="Заполняется только при закрытии"></label>
+    <label class="checkbox"><input type="checkbox" name="blocking" {% if i.get('blocking') %}checked{% endif %}>Блокирует начало / завершение этапа</label>
+  </div>
+  <button>{{ 'Сохранить предписание' if i.id else 'Добавить предписание' }}</button><p class="form-message" role="status" aria-live="polite"></p>
+</form>
+{% endmacro %}
+{% block content %}
+<header class="page-head"><div><p class="eyebrow">{{ project.code }} / Контроль строительства</p><h1>Ход работ и предписания</h1><p>{{ project.name }} · сроки на {{ control.today }} · {{ control.timezone }}</p></div><a class="button secondary" href="/projects/{{ project.id }}">К паспорту объекта</a></header>
+<section class="stats">
+  <article><span>Завершено этапов</span><strong>{{ control.done_stages }} / {{ control.stages }}</strong><small>Не процент готовности объекта</small></article>
+  <article><span>Предписаний не закрыто</span><strong>{{ control.open_issues }}</strong><small>{{ control.awaiting_review }} на проверке</small></article>
+  <article><span>Просрочено предписаний</span><strong>{{ control.overdue_issues }}</strong><a href="?overdue=true#issues">Показать просроченные</a></article>
+  <article><span>Этапов требуют внимания</span><strong>{{ control.attention_stages }}</strong><small>{{ control.overdue_stages }} с истекшим сроком</small></article>
+</section>
+<p class="warning">Участки, зависимости и проценты задаются человеком. ПСК проверяет указанную последовательность, но не выдает допуск к работам и не подтверждает соблюдение технологии. Общий аккаунт пилота: имя проверившего не является электронной подписью.</p>
+<section class="panel"><div class="row"><h2>Этапы по участкам</h2><a href="#new-stage">+ Добавить этап</a></div>
+<p>Для запуска или завершения этапа его предшественник должен быть завершен, а блокирующие предписания — закрыты. Связи между участками указывайте по согласованному плану, не по догадке.</p>
+{% for s in stages %}
+<article class="control-card" id="stage-{{ s.id }}">
+  <div class="row"><div><b>#{{ s.id }} · {{ s.name }}</b><p>{{ s.location or 'Участок не указан' }} · {{ s.responsible }}</p></div><span class="badge {{ 'pending' if s.attention else '' }}">{{ stage_states[s.status] }} · {{ s.progress }}% вручную</span></div>
+  <p>Срок: {{ s.due_date or 'не указан' }}{% if s.overdue %} <b class="danger-text">· Просрочен</b>{% endif %} · Предшественник: {{ s.predecessor_name or 'нет' }}{% if s.document_id %} · Документ #{{ s.document_id }}{% endif %}</p>
+  {% if s.blocking_issues %}<p class="warning">Блокирующих предписаний: {{ s.blocking_issues }}. Если этап уже отмечен завершенным, это отдельное противоречие для проверки — статус автоматически не переписывается.</p>{% endif %}
+  <details><summary>Изменить этап</summary>{{ stage_form(s) }}</details>
+</article>
+{% else %}<p>Этапов нет. Добавьте первый вид работ и участок. Типовая строительная цепочка автоматически не создается.</p>{% endfor %}
+</section>
+<section class="panel" id="new-stage"><details><summary>+ Добавить этап работ</summary>{{ stage_form() }}</details></section>
+<section class="panel" id="issues">
+  <div class="row"><h2>Предписания</h2><a href="#new-issue">+ Добавить предписание</a></div>
+  <p>Открыто → устраняется → на проверке → закрыто. Для закрытия нужны описание устранения, имя проверившего и непустой документ с подтвержденной категорией из реестра. Содержание документа ПСК пока не проверяет.</p>
+  <form class="filters" method="get" action="/projects/{{ project.id }}/control#issues">
+    <label>Статус<select name="status"><option value="">Все</option>{% for key,label in issue_states.items() %}<option value="{{ key }}" {% if status == key %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    <label class="checkbox"><input type="checkbox" name="overdue" value="true" {% if overdue %}checked{% endif %}>Только просроченные</label><button>Показать</button><a href="/projects/{{ project.id }}/control#issues">Сбросить</a>
+  </form><p>Найдено {{ issues.total }} · страница {{ issues.page }}</p>
+  {% for i in issues['items'] %}
+  <article class="control-card" id="issue-{{ i.id }}">
+    <div class="row"><div><b>#{{ i.id }} · {{ i.title }}</b><p>{{ i.responsible }} · до {{ i.due_date }}{% if i.overdue %} <b class="danger-text">· Просрочено</b>{% endif %}</p></div><span class="badge {{ 'pending' if i.status != 'closed' else '' }}">{{ issue_states[i.status] }}</span></div>
+    <p>{{ 'Блокирующее' if i.blocking else 'Не блокирует этап' }} · {{ 'Этап #' ~ i.stage_id if i.stage_id else 'Весь объект' }}{% if i.document_id %} · Документ #{{ i.document_id }}{% endif %}</p>
+    {% if i.description %}<p class="preserve-lines">{{ i.description }}</p>{% endif %}
+    {% if i.resolution %}<p class="preserve-lines"><b>Устранение:</b> {{ i.resolution }}</p>{% endif %}
+    {% if i.closed_at %}<p>Проверивший (указан вручную): {{ i.verified_by }} · закрыто {{ i.closed_at }}</p>{% endif %}
+    <details><summary>Изменить / проверить предписание</summary>{{ issue_form(i) }}</details>
+  </article>
+  {% else %}<p>По этому фильтру предписаний нет.</p>{% endfor %}
+  <div class="pagination">{% if issues.page > 1 %}<a href="{{ request.url.include_query_params(page=issues.page-1) }}#issues">← Предыдущая</a>{% endif %}{% if issues.page * issues.page_size < issues.total %}<a href="{{ request.url.include_query_params(page=issues.page+1) }}#issues">Следующая →</a>{% endif %}</div>
+</section>
+<section class="panel" id="new-issue"><details><summary>+ Добавить предписание</summary>{{ issue_form() }}</details></section>
+{% endblock %}

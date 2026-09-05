@@ -11,9 +11,10 @@ for (const form of document.querySelectorAll('form[data-request]')) {
     if (form.dataset.json) {
       headers['Content-Type'] = 'application/json';
       const values = Object.fromEntries(new FormData(form));
-      for (const key of ['version', 'progress']) {
+      for (const key of ['version', 'progress', 'predecessor_id', 'stage_id', 'document_id']) {
         if (key in values) values[key] = values[key] === '' ? null : Number(values[key]);
       }
+      for (const input of form.querySelectorAll('input[type=checkbox][name]')) values[input.name] = input.checked;
       body = JSON.stringify(values);
     } else if (form.dataset.upload) {
       const data = new FormData(form);
@@ -33,10 +34,33 @@ for (const form of document.querySelectorAll('form[data-request]')) {
         throw new Error(detail || `Ошибка ${response.status}`);
       }
       message.textContent = 'Сохранено';
-      if (data.url) window.location.assign(data.url); else window.location.reload();
+      if (data.url) {
+        const target = new URL(data.url, window.location.href);
+        if (target.origin !== window.location.origin) throw new Error('Некорректный адрес перехода');
+        // A fragment-only navigation does not fetch updated server-rendered forms.
+        if (target.pathname === window.location.pathname && target.search === window.location.search) {
+          window.location.hash = target.hash;
+          window.location.reload();
+        } else window.location.assign(target.href);
+      } else window.location.reload();
     } catch (error) {
       message.textContent = error.message || 'Нет соединения с сервером';
       button.disabled = false;
     }
+  });
+}
+
+for (const form of document.querySelectorAll('form[data-stage]')) {
+  form.elements.status.addEventListener('change', () => {
+    const status = form.elements.status.value;
+    if (status === 'done') form.elements.progress.value = 100;
+    else if (status === 'planned') form.elements.progress.value = 0;
+    else if (Number(form.elements.progress.value) === 100) form.elements.progress.value = 99;
+    form.elements.note.required = status === 'blocked';
+  });
+}
+for (const form of document.querySelectorAll('form[data-issue]')) {
+  form.elements.status.addEventListener('change', () => {
+    if (form.elements.status.value !== 'closed') form.elements.verified_by.value = '';
   });
 }

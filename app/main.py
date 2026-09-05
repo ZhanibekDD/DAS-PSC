@@ -15,6 +15,8 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from app.control import Control
+from app.control_routes import router as control_router
 from app.security import GuardMiddleware
 from app.services.classifier import UNKNOWN, SERVICE
 from app.services.zip_analyzer import DEFAULT_LIMITS, analyze_zip
@@ -72,9 +74,11 @@ def create_app(data_dir: Path | None = None, password: str | None = None) -> Fas
     @asynccontextmanager
     async def lifespan(application):
         application.state.store = Store(directory / "psc.sqlite3", CONFIG["required_categories"])
+        application.state.control = Control(application.state.store, os.environ.get("PSC_TIMEZONE", "UTC"))
+        application.state.control.initialize()
         yield
 
-    app = FastAPI(title="DAS-PSC", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="DAS-PSC", version="0.3.0", lifespan=lifespan)
     hosts = [v.strip() for v in os.environ.get("PSC_ALLOWED_HOSTS", "localhost,127.0.0.1,testserver").split(",") if v.strip()]
     if not shared_password and any(h not in {"localhost", "127.0.0.1", "testserver"} for h in hosts):
         raise RuntimeError("Для сетевого адреса необходимо установить PSC_PASSWORD")
@@ -99,17 +103,17 @@ def create_app(data_dir: Path | None = None, password: str | None = None) -> Fas
     def health(request: Request):
         with store(request).connect() as db:
             db.execute("SELECT 1").fetchone()
-        return {"status": "ok", "service": "das-psc", "version": "0.2.0"}
+        return {"status": "ok", "service": "das-psc", "version": "0.3.0"}
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request):
-        projects = [{**p, **store(request).summary(p["id"])} for p in store(request).projects()]
+        projects = [{**p, **store(request).summary(p["id"]), "control": request.app.state.control.summary(p["id"])} for p in store(request).projects()]
         return render(request, "dashboard.html", projects=projects)
 
     @app.get("/projects/{pid}", response_class=HTMLResponse)
     def project(request: Request, pid: str):
         db = store(request)
-        return render(request, "project.html", project=db.project(pid), summary=db.summary(pid), **db.activity(pid))
+        return render(request, "project.html", project=db.project(pid), summary=db.summary(pid), control=request.app.state.control.summary(pid), **db.activity(pid))
 
     @app.get("/projects/{pid}/documents", response_class=HTMLResponse)
     def documents(request: Request, pid: str, q: str = Query(default="", max_length=200),
@@ -197,6 +201,7 @@ def create_app(data_dir: Path | None = None, password: str | None = None) -> Fas
             writer.writerow([safe(r[k]) for k in ["path", "category", "reviewed", "size", "sha256", "project_code", "revision"]])
         return Response("\ufeff" + out.getvalue(), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": 'attachment; filename="psc-registry.csv"'})
+    app.include_router(control_router)
     return app
 
 

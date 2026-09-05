@@ -35,6 +35,8 @@ jobs:
               p = c.post('/api/projects', json={'name':'Package smoke','code':'SMOKE'}, headers={'X-PSC-Request':'1'}).json()['id']
               assert c.get('/projects/'+p).status_code == 200
               assert c.get('/projects/'+p+'/documents').status_code == 200
+              assert c.get('/projects/'+p+'/control').status_code == 200
+              assert c.get('/static/control.css').status_code == 200
           PY
   docker:
     runs-on: ubuntu-latest
@@ -49,12 +51,26 @@ jobs:
           python3 - <<'PY'
           import urllib.request, json, base64
           headers={'Content-Type':'application/json','X-PSC-Request':'1','Authorization':'Basic '+base64.b64encode(b'psc:synthetic-ci-password').decode()}
-          r=urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:18080/api/projects',data=json.dumps({'name':'Container smoke','code':'CI'}).encode(),headers=headers))
-          p=json.load(r)['id']
+          def post(path,data):
+              return json.load(urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:18080'+path,data=json.dumps(data).encode(),headers=headers)))
+          p=post('/api/projects',{'name':'Container smoke','code':'CI'})['id']
+          post('/api/projects/'+p+'/stages',{'name':'Synthetic stage','responsible':'Test'})
+          post('/api/projects/'+p+'/prescriptions',{'title':'Synthetic issue','responsible':'Test','due_date':'2026-09-10'})
           open('/tmp/psc-project-id','w').write(p)
           PY
           docker restart psc-smoke
           for i in $(seq 1 30); do curl --fail --silent http://127.0.0.1:18080/health && break || sleep 1; done
-          curl --fail --silent -u psc:synthetic-ci-password "http://127.0.0.1:18080/api/projects/$(cat /tmp/psc-project-id)" | python3 -c "import sys,json; assert json.load(sys.stdin)['code']=='CI'"
+          curl --fail --silent -u psc:synthetic-ci-password "http://127.0.0.1:18080/api/projects/$(cat /tmp/psc-project-id)/control" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['stages']==1 and d['open_issues']==1"
       - if: always()
         run: docker logs psc-smoke || true
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install '.[dev]' playwright==1.57.0
+      - run: python -m playwright install --with-deps chromium
+      - run: python scripts/browser_smoke.py
