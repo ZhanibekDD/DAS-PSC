@@ -94,7 +94,14 @@ def content_classification(payload: dict) -> Classification | None:
     return Classification(value["category"], float(value["confidence"]), value["reason"])
 
 
-def make_row(path: str, size: int, sha: str, content: dict) -> dict:
+def make_row(path: str, size: int, sha: str, content: dict | None = None) -> dict:
+    if content is None:
+        suffix = PurePosixPath(path.casefold()).suffix
+        content = ContentAnalysis(
+            "not_analyzed",
+            suffix.lstrip("."),
+            reason="Содержательный анализ не выполнялся для этого источника",
+        ).as_payload()
     path_result = classify_path(path)
     combined = combine_classifications(path_result, content_classification(content))
     return {
