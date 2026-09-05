@@ -1,29 +1,61 @@
-{% extends "base.html" %}{% block title %}Проверка импорта · DAS-PSC{% endblock %}{% block content %}
-<header class="page-head"><div><p class="eyebrow">{{ project.code }} / импорт ZIP</p><h1>Проверка перед сохранением</h1><p>{{ job.source }}</p></div><span class="badge">{{ {'pending':'Анализ завершен','confirmed':'Реестр сохранен','cancelled':'Отменен'}[job.status] }}</span></header>
-<section class="stats">
-  <article><span>Файлов</span><strong>{{ job.analysis.file_count }}</strong></article>
-  <article><span>Категория не определена</span><strong>{{ job.analysis.review_count }}</strong></article>
-  <article><span>Групп дублей</span><strong>{{ job.analysis.duplicate_groups|length }}</strong></article>
-  <article><span>Текст прочитан</span><strong>{{ job.analysis.content_text_files|default(0) }}</strong><small>PDF/DOCX с текстовым слоем</small></article>
-  <article><span>Нужен OCR</span><strong>{{ job.analysis.content_needs_ocr|default(0) }}</strong><small>PDF без извлекаемого текста</small></article>
-  <article><span>Размер после распаковки</span><strong>{{ (job.analysis.total_uncompressed_size/1048576)|round(1) }}</strong><small>МиБ · исходники не сохраняются</small></article>
+{% extends "base.html" %}
+{% block title %}Импорт документов · ПСК{% endblock %}
+{% block content %}
+<header class="object-header compact-header">
+  <div><a class="back-link" href="/projects/{{ project.id }}">← Обзор объекта</a><span class="kicker">{{ project.code }}</span><h1>Импорт документов</h1><p>{{ job.source }}</p></div>
+  <span class="pill {{ 'pill-ok' if job.status == 'confirmed' else 'pill-wait' }}">{{ {'pending':'Анализ завершён','confirmed':'Сохранено','cancelled':'Отменено'}[job.status] }}</span>
+</header>
+
+<section class="stepper">
+  <article class="done"><span>1</span><div><b>Загрузка</b><small>Архив получен</small></div></article>
+  <article class="done"><span>2</span><div><b>Анализ</b><small>{{ job.analysis.file_count }} файлов проверено</small></div></article>
+  <article class="{{ 'done' if job.status == 'confirmed' else 'active' }}"><span>3</span><div><b>Сохранение</b><small>{{ 'Готово' if job.status == 'confirmed' else 'Нужно подтвердить' }}</small></div></article>
 </section>
+
+<section class="result-summary">
+  <div class="result-title"><div class="completion-mark">✓</div><div><span class="kicker">Анализ завершён</span><h2>ПСК закончил разбор архива</h2><p>Теперь видно, что удалось прочитать автоматически и что потребует дополнительной проверки.</p></div></div>
+  <div class="metric-grid compact-metrics">
+    <article><span>Файлов</span><strong>{{ job.analysis.file_count }}</strong></article>
+    <article><span>Текст прочитан</span><strong>{{ job.analysis.content_text_files|default(0) }}</strong><small>PDF/DOCX</small></article>
+    <article><span>Нужен OCR</span><strong>{{ job.analysis.content_needs_ocr|default(0) }}</strong><small>сканы PDF</small></article>
+    <article><span>Неясная категория</span><strong>{{ job.analysis.review_count }}</strong><small>нужна проверка</small></article>
+  </div>
+</section>
+
 {% if job.status == 'pending' %}
-<section class="panel analysis-complete"><div class="completion-mark">✓</div><div><p class="eyebrow">Шаг 1 завершен</p><h2>Архив полностью загружен и проанализирован</h2><p>ПСК закончил загрузку, проверку хэшей и доступный содержательный разбор. Теперь можно сохранить результаты в реестр.</p><div class="completion-numbers"><span><b>{{ job.analysis.file_count }}</b> файлов проверено</span><span><b>{{ job.analysis.content_text_files|default(0) }}</b> прочитано по тексту</span><span><b>{{ job.analysis.content_needs_ocr|default(0) }}</b> требуют OCR</span></div></div></section>
-{% elif job.status == 'confirmed' and job.refresh and (job.refresh.analysis_updates or job.refresh.changed) %}
-<section class="panel analysis-complete"><div class="completion-mark">✓</div><div><p class="eyebrow">Повторный анализ завершен</p><h2>Новые результаты готовы к применению</h2><p>ПСК повторно прочитал тот же архив и подготовил безопасный предпросмотр. Подтвержденные человеком записи остаются защищены.</p></div></section>
+<section class="next-action primary-action">
+  <div class="action-number">3</div>
+  <div><span class="kicker">Последний шаг</span><h2>Сохранить результат в объект</h2><p>ПСК сохранит реестр и производные результаты анализа. Сам ZIP и извлечённый текст в базе не сохраняются.</p></div>
+  <div class="stack-actions"><form data-request="/api/projects/{{ project.id }}/imports/{{ job.id }}/confirm"><button>Подтвердить и сохранить реестр</button><p class="form-message" role="status"></p></form><form data-request="/api/projects/{{ project.id }}/imports/{{ job.id }}/cancel"><button class="secondary">Отменить импорт</button><p class="form-message" role="status"></p></form></div>
+</section>
 {% elif job.status == 'confirmed' %}
-<section class="panel analysis-complete"><div class="completion-mark">✓</div><div><p class="eyebrow">Готово</p><h2>Реестр и результаты анализа сохранены</h2><p>Можно переходить к документам и дальнейшей проверке.</p></div></section>
+<section class="next-action success-action"><div class="action-number">✓</div><div><span class="kicker">Готово</span><h2>Результаты сохранены</h2><p>Можно перейти к очереди проверки документов.</p></div><a class="button" href="/projects/{{ project.id }}/documents?review=true">Открыть документы</a></section>
 {% endif %}
-{% if job.analysis.warnings %}<section class="panel"><h2>Неполный NAS-снимок</h2><p class="warning">Часть элементов пропущена. Отсутствие раздела в этом снимке не означает отсутствие документов на NAS.</p>{% for w in job.analysis.warnings %}<p>{{ w.path }} — {{ w.reason }}</p>{% endfor %}</section>{% endif %}
-<section class="panel"><h2>{{ 'Шаг 2 · сохранить результаты анализа' if job.status == 'pending' else 'Результат импорта' }}</h2><p>ПСК сохраняет пути, размеры, хеши, машинные предложения и только производные результаты содержательного анализа. Исходный текст PDF/DOCX и сами файлы в базе ПСК не сохраняются. Физическая раскладка по папкам не выполняется.</p>{% if job.status == 'pending' %}<div class="actions"><form data-request="/api/projects/{{ project.id }}/imports/{{ job.id }}/confirm"><button>Подтвердить и сохранить реестр</button><p class="form-message" role="status"></p></form><form data-request="/api/projects/{{ project.id }}/imports/{{ job.id }}/cancel"><button class="secondary">Отменить импорт</button><p class="form-message" role="status"></p></form></div>{% elif job.status == 'confirmed' %}<a class="button" href="/projects/{{ project.id }}/documents">Перейти в реестр</a>{% endif %}</section>
+
 {% if job.status == 'confirmed' and job.refresh and (job.refresh.analysis_updates or job.refresh.changed) %}
-<section class="panel rule-refresh">
-  <div class="row"><div><p class="eyebrow">Повторный анализ того же ZIP</p><h2>Применить содержательный анализ к существующему реестру</h2><p>Совпало документов: <b>{{ job.refresh.matched }}</b>. Обновится метаданных анализа: <b>{{ job.refresh.analysis_updates }}</b>. Машинные предложения изменятся у <b>{{ job.refresh.changed }}</b> нетронутых документов. Защищено подтвержденных/измененных человеком: <b>{{ job.refresh.protected }}</b>.</p><p>Текст прочитан у {{ job.refresh.content_text_files }} файлов · OCR нужен для {{ job.refresh.content_needs_ocr }} PDF · ошибок/таймаутов {{ job.refresh.content_errors }}.</p></div>
-  <form data-request="/api/projects/{{ project.id }}/imports/{{ job.id }}/refresh" data-json="true" data-confirm="Применить результаты чтения PDF/DOCX к существующему реестру? Подтвержденные человеком записи не будут изменены."><input type="hidden" name="expected_token" value="{{ job.refresh.token }}"><button>Применить анализ содержания</button><p class="form-message" role="status"></p></form></div>
-  {% if job.refresh.samples %}<details><summary>Показать примеры изменения предложений</summary><div class="table-wrap"><table><thead><tr><th>Файл</th><th>Было</th><th>Станет</th></tr></thead><tbody>{% for item in job.refresh.samples %}<tr><td><b>{{ item.name }}</b></td><td>{{ item.from_category }}<small>{{ '%.2f'|format(item.from_score) }}</small></td><td>{{ item.to_category }}<small>{{ '%.2f'|format(item.to_score) }} · {{ item.reason }}</small></td></tr>{% endfor %}</tbody></table></div></details>{% endif %}
-  <small>Операция использует точное совпадение путь + SHA-256. Подтвержденные человеком и версии, измененные вручную, защищены. Исходный текст не записывается в SQLite.</small>
+<section class="next-action rule-refresh">
+  <div class="action-number">AI</div>
+  <div><span class="kicker">Новый разбор того же архива</span><h2>ПСК нашёл уточнения для существующего реестра</h2><p>Совпало {{ job.refresh.matched }} документов. Анализ обновится у {{ job.refresh.analysis_updates }}. Машинное предложение изменится у {{ job.refresh.changed }}. Защищено человеком: {{ job.refresh.protected }}.</p><details><summary>Показать примеры изменений</summary>{% if job.refresh.samples %}<div class="simple-change-list">{% for item in job.refresh.samples %}<div><b>{{ item.name }}</b><span>{{ item.from_category }} → {{ item.to_category }}</span></div>{% endfor %}</div>{% else %}<p>Категории не меняются — обновятся только результаты анализа.</p>{% endif %}</details></div>
+  <form data-request="/api/projects/{{ project.id }}/imports/{{ job.id }}/refresh" data-json="true" data-confirm="Применить результаты анализа к существующему реестру? Подтвержденные человеком записи не будут изменены."><input type="hidden" name="expected_token" value="{{ job.refresh.token }}"><button>Применить анализ содержания</button><p class="form-message" role="status"></p></form>
 </section>
 {% endif %}
-<section class="panel"><h2>Предложения категорий · страница {{ page }}</h2><p>Сначала учитываются имя/путь. Для PDF с текстовым слоем и DOCX дополнительно читается содержимое; при конфликте система отправляет документ на ручную проверку. OCR сканов в этой версии еще не выполняется.</p><div class="table-wrap"><table><thead><tr><th>Исходный путь</th><th>Предложенная категория</th><th>Анализ содержания</th><th>Размер / SHA-256</th></tr></thead><tbody>{% for row in rows %}<tr><td class="path">{{ row.path }}</td><td>{{ row.classification.category }}<small>{{ row.classification.reason }}</small></td><td>{% set ca=row.content_analysis|default({}) %}{% if ca.status == 'text' %}<span class="badge">Текст прочитан</span><small>{{ ca.text_chars }} символов{% if ca.pages %} · {{ ca.pages }} стр.{% endif %}</small>{% if ca.classification %}<small>По тексту: {{ ca.classification.category }} · {{ '%.2f'|format(ca.classification.confidence) }}</small>{% endif %}{% elif ca.needs_ocr %}<span class="badge pending">Нужен OCR</span><small>{{ ca.reason }}</small>{% elif ca.status == 'no_text' %}<span class="badge pending">Текст не найден</span><small>{{ ca.reason }}</small>{% elif ca.status == 'too_large' %}<span class="badge pending">Пропущен по лимиту</span><small>{{ ca.reason }}</small>{% elif ca.status in ['error','timeout','encrypted'] %}<span class="badge pending">Не прочитан</span><small>{{ ca.reason }}</small>{% else %}<small>Формат пока не читается по содержанию</small>{% endif %}</td><td>{{ row.size }} байт<small><code title="{{ row.sha256 }}">{{ row.sha256[:16] }}…</code></small></td></tr>{% endfor %}</tbody></table></div><div class="pagination">{% if page > 1 %}<a href="?page={{ page-1 }}">← Предыдущая</a>{% endif %}{% if page*100 < job.analysis.file_count %}<a href="?page={{ page+1 }}">Следующая →</a>{% endif %}</div></section>
+
+<section class="panel">
+  <details class="advanced-block" {% if job.status == 'pending' %}open{% endif %}>
+    <summary>Что ПСК увидел в документах <span>страница {{ page }}</span></summary>
+    <div class="analysis-list">
+    {% for row in rows %}
+      {% set ca=row.content_analysis|default({}) %}
+      <article class="analysis-row">
+        <div class="analysis-file"><b>{{ row.name if row.name is defined else row.path.split('/')[-1] }}</b><small class="path">{{ row.path }}</small></div>
+        <div><span class="pill">{{ row.classification.category }}</span></div>
+        <div>{% if ca.status == 'text' %}<span class="pill pill-text">Текст прочитан</span><small>{{ ca.text_chars }} символов{% if ca.pages %} · {{ ca.pages }} стр.{% endif %}</small>{% elif ca.needs_ocr %}<span class="pill pill-ocr">Нужен OCR</span><small>Это PDF-скан</small>{% elif ca.status == 'no_text' %}<span class="pill pill-wait">Текст не найден</span>{% elif ca.status in ['error','timeout','encrypted','too_large'] %}<span class="pill pill-wait">Не прочитан</span><small>{{ ca.reason }}</small>{% else %}<span class="muted">Без чтения содержимого</span>{% endif %}</div>
+      </article>
+    {% endfor %}
+    </div>
+    <div class="pagination">{% if page > 1 %}<a href="?page={{ page-1 }}">← Назад</a>{% endif %}{% if page*100 < job.analysis.file_count %}<a href="?page={{ page+1 }}">Дальше →</a>{% endif %}</div>
+  </details>
+</section>
+
+<section class="panel"><details class="advanced-block"><summary>Техническая информация</summary><p class="hint">Групп точных дублей: {{ job.analysis.duplicate_groups|length }}. Размер после распаковки: {{ (job.analysis.total_uncompressed_size/1048576)|round(1) }} МиБ. ПСК хранит только реестр и производные результаты; исходные файлы не перемещает и не удаляет.</p></details></section>
 {% endblock %}
