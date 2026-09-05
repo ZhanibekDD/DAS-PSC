@@ -25,6 +25,10 @@ class UnsafeArchive(ValueError):
     """Untrusted input rejected before any registry write."""
 
 
+class ContentBudgetExceeded(Exception):
+    """Best-effort content analysis stopped without invalidating the archive."""
+
+
 @dataclass(frozen=True)
 class Limits:
     max_entries: int = 5000
@@ -38,6 +42,7 @@ class Limits:
 DEFAULT_LIMITS = Limits()
 HASH_CHUNK = 1024 * 1024
 CONTENT_SUFFIXES = {".pdf", ".docx"}
+CONTENT_ANALYSIS_SECONDS = 90.0
 
 
 def safe_path(name: str) -> str:
@@ -70,7 +75,7 @@ def read_content_bytes(stream: BinaryIO, expected_size: int, deadline: float) ->
     data = bytearray()
     while True:
         if time.monotonic() > deadline:
-            raise UnsafeArchive("Превышено время анализа")
+            raise ContentBudgetExceeded
         chunk = stream.read(HASH_CHUNK)
         if not chunk:
             break
@@ -123,12 +128,12 @@ def summarize(rows: list[dict]) -> dict:
 
 
 def analyze_zip(file_obj: BinaryIO, limits: Limits = DEFAULT_LIMITS) -> dict:
-    """Streams entries for hashes; content is read only in memory for bounded PDF/DOCX analysis."""
+    """Hash every source first; bounded PDF/DOCX content reading is a best-effort second pass."""
     file_obj.seek(0, 2)
     if file_obj.tell() > limits.max_upload:
         raise UnsafeArchive("Слишком большой ZIP")
     file_obj.seek(0)
-    deadline = time.monotonic() + limits.max_seconds
+    hash_deadline = time.monotonic() + limits.max_seconds
     try:
         with zipfile.ZipFile(file_obj) as archive:
             all_infos = archive.infolist()
@@ -156,19 +161,33 @@ def analyze_zip(file_obj: BinaryIO, limits: Limits = DEFAULT_LIMITS) -> dict:
                     raise UnsafeArchive("Подозрительная степень сжатия ZIP")
                 prepared.append((info, path))
 
-            rows, actual_total = [], 0
+            hashed, actual_total = [], 0
             for info, path in prepared:
                 with archive.open(info) as stream:
-                    sha, size = hash_stream(stream, limits, deadline)
+                    sha, size = hash_stream(stream, limits, hash_deadline)
                 actual_total += size
                 if size != info.file_size or actual_total > limits.max_total:
                     raise UnsafeArchive("Размер содержимого ZIP не соответствует лимитам")
+                hashed.append((info, path, sha, size))
 
+            rows = []
+            content_deadline = time.monotonic() + CONTENT_ANALYSIS_SECONDS
+            for info, path, sha, size in hashed:
                 suffix = PurePosixPath(path.casefold()).suffix
                 if suffix in CONTENT_SUFFIXES and size <= MAX_CONTENT_FILE:
-                    with archive.open(info) as stream:
-                        raw = read_content_bytes(stream, size, deadline)
-                    content = analyze_content(path, raw, deadline)
+                    if time.monotonic() > content_deadline:
+                        content = ContentAnalysis(
+                            "timeout", suffix.lstrip("."), reason="Общий лимит содержательного анализа исчерпан"
+                        ).as_payload()
+                    else:
+                        try:
+                            with archive.open(info) as stream:
+                                raw = read_content_bytes(stream, size, content_deadline)
+                            content = analyze_content(path, raw, content_deadline)
+                        except ContentBudgetExceeded:
+                            content = ContentAnalysis(
+                                "timeout", suffix.lstrip("."), reason="Общий лимит содержательного анализа исчерпан"
+                            ).as_payload()
                 elif suffix in CONTENT_SUFFIXES:
                     content = ContentAnalysis(
                         "too_large",
@@ -176,7 +195,7 @@ def analyze_zip(file_obj: BinaryIO, limits: Limits = DEFAULT_LIMITS) -> dict:
                         reason=f"Файл больше {MAX_CONTENT_FILE // (1024 * 1024)} МиБ; содержательный разбор пропущен",
                     ).as_payload()
                 else:
-                    content = analyze_content(path, b"", deadline)
+                    content = analyze_content(path, b"", content_deadline)
                 rows.append(make_row(path, size, sha, content))
             return summarize(rows)
     except (zipfile.BadZipFile, RuntimeError, NotImplementedError, EOFError, zlib.error) as exc:
