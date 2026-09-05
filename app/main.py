@@ -18,12 +18,13 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from app.control import Control
 from app.control_routes import router as control_router
 from app.security import GuardMiddleware
-from app.services.classifier import UNKNOWN, SERVICE
+from app.services.classifier import HIGH_CONFIDENCE, SERVICE, UNKNOWN
 from app.services.zip_analyzer import DEFAULT_LIMITS, analyze_zip
 from app.store import Conflict, NotFound, Store
 
 BASE = Path(__file__).resolve().parent
 CONFIG = json.loads((BASE / "config/object_template.json").read_text(encoding="utf-8"))
+APP_VERSION = "0.4.0"
 
 
 class ProjectInput(BaseModel):
@@ -65,6 +66,11 @@ class ReviewInput(BaseModel):
     version: int = Field(ge=1)
 
 
+class BulkReviewInput(BaseModel):
+    min_score: float = Field(default=HIGH_CONFIDENCE, ge=HIGH_CONFIDENCE, le=1.0)
+    category: str = Field(default="", max_length=200)
+
+
 def create_app(data_dir: Path | None = None, password: str | None = None) -> FastAPI:
     directory = Path(data_dir or os.environ.get("PSC_DATA_DIR", "data"))
     shared_password = os.environ.get("PSC_PASSWORD", "") if password is None else password
@@ -78,7 +84,7 @@ def create_app(data_dir: Path | None = None, password: str | None = None) -> Fas
         application.state.control.initialize()
         yield
 
-    app = FastAPI(title="DAS-PSC", version="0.3.0", lifespan=lifespan)
+    app = FastAPI(title="DAS-PSC", version=APP_VERSION, lifespan=lifespan)
     hosts = [v.strip() for v in os.environ.get("PSC_ALLOWED_HOSTS", "localhost,127.0.0.1,testserver").split(",") if v.strip()]
     if not shared_password and any(h not in {"localhost", "127.0.0.1", "testserver"} for h in hosts):
         raise RuntimeError("Для сетевого адреса необходимо установить PSC_PASSWORD")
@@ -96,14 +102,23 @@ def create_app(data_dir: Path | None = None, password: str | None = None) -> Fas
         return request.app.state.store
 
     def render(request, name, **context):
-        return templates.TemplateResponse(request=request, name=name,
-                                          context={"categories": CONFIG["required_categories"], "unknown": UNKNOWN, "service": SERVICE, **context})
+        return templates.TemplateResponse(
+            request=request,
+            name=name,
+            context={
+                "categories": CONFIG["required_categories"],
+                "unknown": UNKNOWN,
+                "service": SERVICE,
+                "app_version": APP_VERSION,
+                **context,
+            },
+        )
 
     @app.get("/health")
     def health(request: Request):
         with store(request).connect() as db:
             db.execute("SELECT 1").fetchone()
-        return {"status": "ok", "service": "das-psc", "version": "0.3.0"}
+        return {"status": "ok", "service": "das-psc", "version": APP_VERSION}
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request):
@@ -120,9 +135,20 @@ def create_app(data_dir: Path | None = None, password: str | None = None) -> Fas
                   category: str = Query(default="", max_length=200), review: bool = False,
                   duplicates: bool = False, page: int = Query(default=1, ge=1, le=100000)):
         db = store(request)
-        result = db.documents(pid, q, category, review, duplicates, page)
-        return render(request, "documents.html", project=db.project(pid), result=result,
-                      q=q, category=category, review=review, duplicates=duplicates, summary=db.summary(pid))
+        duplicate_result = db.duplicate_groups(pid, q, category, review, page) if duplicates else None
+        result = db.documents(pid, q, category, review, False, page) if not duplicates else None
+        return render(
+            request,
+            "documents.html",
+            project=db.project(pid),
+            result=result,
+            duplicate_result=duplicate_result,
+            q=q,
+            category=category,
+            review=review,
+            duplicates=duplicates,
+            summary=db.summary(pid),
+        )
 
     @app.get("/projects/{pid}/imports/{iid}", response_class=HTMLResponse)
     def import_preview(request: Request, pid: str, iid: str, page: int = Query(default=1, ge=1, le=100000)):
@@ -154,6 +180,13 @@ def create_app(data_dir: Path | None = None, password: str | None = None) -> Fas
                       duplicates: bool = False, page: int = Query(default=1, ge=1, le=100000),
                       page_size: int = Query(default=100, ge=1, le=200)):
         return store(request).documents(pid, q, category, review, duplicates, page, page_size)
+
+    # Keep the fixed path before /documents/{did}, otherwise "bulk-review" would be
+    # interpreted as a document id and fail integer validation.
+    @app.post("/api/projects/{pid}/documents/bulk-review")
+    def bulk_review_documents(request: Request, pid: str, values: BulkReviewInput):
+        result = store(request).bulk_review(pid, values.min_score, values.category)
+        return {**result, "url": f"/projects/{pid}/documents?review=true"}
 
     @app.patch("/api/projects/{pid}/documents/{did}")
     def review_document(request: Request, pid: str, did: int, values: ReviewInput):
@@ -193,14 +226,19 @@ def create_app(data_dir: Path | None = None, password: str | None = None) -> Fas
         rows = store(request).documents(pid, page_size=2147483647)["items"]
         out = io.StringIO()
         writer = csv.writer(out)
-        writer.writerow(["Путь", "Категория", "Категория проверена", "Байт", "SHA-256", "Код (гипотеза)", "Ревизия (гипотеза)"])
+        writer.writerow(["Путь", "Категория", "Категория проверена", "Уверенность правил",
+                         "Причина", "Байт", "SHA-256", "Код (гипотеза)", "Ревизия (гипотеза)"])
+
         def safe(value):
             text = str(value if value is not None else "")
             return "'" + text if text.lstrip().startswith(("=", "+", "-", "@")) or text.startswith(("\t", "\r", "\n")) else text
+
         for r in rows:
-            writer.writerow([safe(r[k]) for k in ["path", "category", "reviewed", "size", "sha256", "project_code", "revision"]])
+            writer.writerow([safe(r[k]) for k in ["path", "category", "reviewed", "score", "reason",
+                                                   "size", "sha256", "project_code", "revision"]])
         return Response("\ufeff" + out.getvalue(), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": 'attachment; filename="psc-registry.csv"'})
+
     app.include_router(control_router)
     return app
 
