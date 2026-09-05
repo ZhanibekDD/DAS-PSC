@@ -8,15 +8,17 @@ import time
 import zipfile
 from dataclasses import asdict, dataclass
 from pathlib import PurePosixPath
-from xml.etree import ElementTree as ET
 
+from defusedxml import ElementTree as ET
+from defusedxml.common import DefusedXmlException
 from pypdf import PdfReader
 
 from app.services.classifier import Classification, classify_content
 
 MAX_CONTENT_FILE = 32 * 1024 * 1024
 MAX_TEXT_CHARS = 200_000
-MAX_PDF_PAGES = 120
+MAX_PDF_PAGES = 1000
+MAX_PDF_EXTRACT_PAGES = 40
 MAX_DOCX_XML = 12 * 1024 * 1024
 MAX_DOCX_TOTAL_XML = 24 * 1024 * 1024
 
@@ -74,10 +76,11 @@ def _pdf(data: bytes, deadline: float) -> ContentAnalysis:
             )
         chunks: list[str] = []
         chars = 0
-        for page in reader.pages:
+        extract_pages = min(pages, MAX_PDF_EXTRACT_PAGES)
+        for index in range(extract_pages):
             if time.monotonic() > deadline:
                 return ContentAnalysis("timeout", "pdf", pages=pages, reason="Не хватило времени на чтение PDF")
-            value = page.extract_text() or ""
+            value = reader.pages[index].extract_text() or ""
             if value:
                 remaining = MAX_TEXT_CHARS - chars
                 if remaining <= 0:
@@ -85,7 +88,17 @@ def _pdf(data: bytes, deadline: float) -> ContentAnalysis:
                 value = value[:remaining]
                 chunks.append(value)
                 chars += len(value)
-        return _finish("pdf", "\n".join(chunks), pages)
+        result = _finish("pdf", "\n".join(chunks), pages)
+        if result.status == "text" and pages > extract_pages:
+            return ContentAnalysis(
+                "text",
+                "pdf",
+                result.text_chars,
+                pages,
+                f"Прочитаны первые {extract_pages} из {pages} страниц; исходный текст не сохраняется",
+                result.classification,
+            )
+        return result
     except Exception:
         return ContentAnalysis("error", "pdf", reason="PDF не удалось безопасно прочитать")
 
@@ -122,7 +135,7 @@ def _docx(data: bytes, deadline: float) -> ContentAnalysis:
                 if text:
                     chunks.append(text)
             return _finish("docx", "\n".join(chunks))
-    except (zipfile.BadZipFile, KeyError, ET.ParseError, RuntimeError, NotImplementedError):
+    except (zipfile.BadZipFile, KeyError, ET.ParseError, DefusedXmlException, RuntimeError, NotImplementedError):
         return ContentAnalysis("error", "docx", reason="DOCX не удалось безопасно прочитать")
 
 
