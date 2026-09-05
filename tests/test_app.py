@@ -151,8 +151,10 @@ def test_password(tmp_path):
         assert c.get('/').status_code == 401
         assert c.get('/', auth=('psc', 'wrong')).status_code == 401
         assert c.get('/', auth=('psc', 'synthetic-test-password')).status_code == 200
+    with TestClient(create_app(tmp_path, password='123456789')) as c:
+        assert c.get('/', auth=('psc', '123456789')).status_code == 200
     with pytest.raises(RuntimeError):
-        create_app(tmp_path, password='weak')
+        create_app(tmp_path, password='12345678')
 
 
 def test_xss_escaping(client):
