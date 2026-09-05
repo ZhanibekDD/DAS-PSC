@@ -1,6 +1,63 @@
-{% extends "base.html" %}{% block title %}Объекты · DAS-PSC{% endblock %}{% block content %}
-<header class="page-head"><div><p class="eyebrow">Рабочее пространство</p><h1>Строительные объекты</h1><p>От архива документов — к проверяемому реестру.</p></div><a class="button" href="#create">+ Создать объект</a></header>
-<section class="stats"><article><span>Объекты</span><strong>{{ projects|length }}</strong></article><article><span>Файлы в реестре</span><strong>{{ projects|sum(attribute='documents') }}</strong></article><article><span>Категории на проверке</span><strong>{{ projects|sum(attribute='review') }}</strong></article><article><span>Группы одинаковых файлов</span><strong>{{ projects|sum(attribute='duplicate_groups') }}</strong></article></section>
-{% for p in projects %}<a class="project-card" href="/projects/{{ p.id }}"><div class="row"><div><span class="badge">{{ p.stage }}</span><h2>{{ p.name }}</h2><p>{{ p.code }} · {{ p.responsible or 'Ответственный не указан' }}</p></div><span class="arrow">→</span></div><div class="project-metrics"><span>{{ p.documents }} файлов</span><span>{{ p.coverage.present }} / {{ p.coverage.total }} разделов с файлами</span><span>Ход работ: {{ (p.progress|string + '% · вручную') if p.progress is not none else 'не указан' }}</span><span>Предписаний: {{ p.control.open_issues }} · просрочено: {{ p.control.overdue_issues }}</span></div></a>{% else %}<section class="panel empty"><h2>Начните с одного объекта</h2><p>Создайте карточку, загрузите ZIP и проверьте найденные документы. Данные появятся только после ваших действий — демо-цифр нет.</p></section>{% endfor %}
-<section class="panel" id="create"><p class="eyebrow">Новый объект</p><h2>Создать карточку</h2><form data-request="/api/projects" data-json="true"><div class="form-grid"><label>Название<input name="name" required maxlength="200" placeholder="Название строительного объекта"></label><label>Код объекта<input name="code" required maxlength="100" placeholder="Например: PROJECT-001"></label><label>Заказчик<input name="customer" maxlength="200"></label><label>Ответственный<input name="responsible" maxlength="200"></label></div><button type="submit">Создать объект</button><p class="form-message" role="status"></p></form></section>
+{% extends "base.html" %}
+{% block title %}Объекты · ПСК{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <span class="kicker">Проектно-строительный контроль</span>
+    <h1>ПСК показывает, что происходит с объектом</h1>
+    <p class="lead">Загрузите документы — система разберёт их, покажет что найдено, что требует проверки, где есть дубли и какие работы или замечания требуют внимания.</p>
+    <div class="hero-actions"><a class="button" href="#create">Создать объект</a>{% if projects %}<a class="button secondary" href="/projects/{{ projects[0].id }}">Открыть последний объект</a>{% endif %}</div>
+  </div>
+  <div class="goal-card">
+    <b>Конечная цель</b>
+    <p>Не «хранить файлы», а ответить руководителю на 4 вопроса:</p>
+    <ol>
+      <li>Какие документы есть?</li>
+      <li>Чего не хватает или что сомнительно?</li>
+      <li>Что сейчас делается на объекте?</li>
+      <li>Какие замечания и сроки требуют внимания?</li>
+    </ol>
+  </div>
+</section>
+
+<section class="how-it-works">
+  <article><span>1</span><div><b>Загрузите архив</b><p>Один ZIP с документами объекта.</p></div></article>
+  <article><span>2</span><div><b>ПСК разберёт</b><p>Категории, текст PDF/DOCX, дубли, OCR и спорные места.</p></div></article>
+  <article><span>3</span><div><b>Работайте по подсказкам</b><p>Проверяйте только спорное и ведите этапы с замечаниями.</p></div></article>
+</section>
+
+{% if projects %}
+<header class="section-head"><div><h2>Ваши объекты</h2><p>{{ projects|length }} объектов · {{ projects|sum(attribute='documents') }} файлов в реестрах</p></div></header>
+<section class="project-list">
+{% for p in projects %}
+<a class="project-card simple" href="/projects/{{ p.id }}">
+  <div class="project-card-main">
+    <div><span class="status-dot"></span><span class="muted">{{ p.code }}</span><h3>{{ p.name }}</h3><p>{{ p.responsible or 'Ответственный не указан' }}</p></div>
+    <span class="arrow">→</span>
+  </div>
+  <div class="project-card-metrics">
+    <span><b>{{ p.documents }}</b> документов</span>
+    <span><b>{{ p.review }}</b> требуют проверки</span>
+    <span><b>{{ p.control.open_issues }}</b> открытых замечаний</span>
+    <span><b>{{ p.control.overdue_issues }}</b> просрочено</span>
+  </div>
+</a>
+{% endfor %}
+</section>
+{% else %}
+<section class="empty-state"><div class="empty-icon">＋</div><h2>Пока нет объектов</h2><p>Создайте первый объект и загрузите ZIP. ПСК сам сформирует рабочую картину.</p><a class="button" href="#create">Создать первый объект</a></section>
+{% endif %}
+
+<section class="panel form-panel" id="create">
+  <div class="section-head"><div><span class="kicker">Новый объект</span><h2>Создать объект</h2><p>Для старта достаточно названия и кода. Остальное можно заполнить позже.</p></div></div>
+  <form data-request="/api/projects" data-json="true">
+    <div class="form-grid">
+      <label>Название объекта<input name="name" required maxlength="200" placeholder="Например: ДНС-11"></label>
+      <label>Код объекта<input name="code" required maxlength="100" placeholder="Например: PSC-001"></label>
+      <label>Заказчик <span class="optional">необязательно</span><input name="customer" maxlength="200"></label>
+      <label>Ответственный <span class="optional">необязательно</span><input name="responsible" maxlength="200"></label>
+    </div>
+    <div class="form-actions"><button type="submit">Создать объект</button><p class="form-message" role="status"></p></div>
+  </form>
+</section>
 {% endblock %}
