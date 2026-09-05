@@ -1,0 +1,96 @@
+name: Isolated pilot package
+on:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: psc-pilot-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  isolated-pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Build on CI, never on the shared target server
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          docker build --label org.opencontainers.image.revision="$SOURCE_SHA" -t psc-pilot-ci .
+          mkdir -m 700 bundle
+          cp deploy/pilot.py deploy/compose.pilot.yml deploy/DEPLOYMENT.md bundle/
+          docker save psc-pilot-ci | gzip > bundle/psc-image.tar.gz
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib,subprocess
+          d=pathlib.Path('bundle')
+          def sha(path):
+              h=hashlib.sha256()
+              with path.open('rb') as f:
+                  for b in iter(lambda:f.read(1048576),b''): h.update(b)
+              return h.hexdigest()
+          image=subprocess.check_output(['docker','image','inspect','--format','{{.Id}}','psc-pilot-ci'],text=True).strip()
+          meta={'commit':os.environ['SOURCE_SHA'],'platform':'linux/amd64','image_id':image,
+                'archive_sha256':sha(d/'psc-image.tar.gz'),
+                'files':{n:sha(d/n) for n in ['pilot.py','compose.pilot.yml']}}
+          (d/'manifest.json').write_text(json.dumps(meta,indent=2))
+          PY
+      - name: Sentinel outside the pilot project
+        run: |
+          docker run -d --name psc-isolation-sentinel --network none --memory 64m --cpus 0.1 --pids-limit 16 --entrypoint sleep psc-pilot-ci 600
+      - name: Preflight and real isolated first launch
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 bundle/pilot.py preflight
+          python3 bundle/pilot.py start --expect-commit "$SOURCE_SHA"
+          python3 bundle/pilot.py verify
+      - name: SQLite backup restore and container recreation
+        run: |
+          python3 - <<'PY'
+          import importlib.util,json,sqlite3,tempfile,urllib.request,base64,time,pathlib
+          spec=importlib.util.spec_from_file_location('pilot','bundle/pilot.py')
+          p=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)
+          cfg=p.config();cid=p.own_id(cfg)
+          auth=base64.b64encode(('psc:'+cfg['password']).encode()).decode()
+          req=urllib.request.Request('http://127.0.0.1:18090/api/projects',data=json.dumps({'name':'Synthetic isolated pilot','code':'PILOT-CI'}).encode(),headers={'Authorization':'Basic '+auth,'Content-Type':'application/json','X-PSC-Request':'1'})
+          with p.HTTP.open(req) as r: pid=json.load(r)['id']
+          code="import sqlite3; a=sqlite3.connect('file:/data/psc.sqlite3?mode=ro',uri=True); b=sqlite3.connect('/tmp/psc-backup.sqlite3'); a.backup(b); assert b.execute('PRAGMA integrity_check').fetchone()[0]=='ok'; a.close(); b.close()"
+          p.run('docker','exec',cid,'python','-c',code)
+          with tempfile.TemporaryDirectory() as d:
+              copy=pathlib.Path(d)/'copy.sqlite3'
+              p.run('docker','cp',cid+':/tmp/psc-backup.sqlite3',str(copy))
+              with sqlite3.connect(copy) as a,sqlite3.connect(pathlib.Path(d)/'restored.sqlite3') as b:
+                  a.backup(b)
+                  assert b.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
+                  assert b.execute('PRAGMA foreign_key_check').fetchall()==[]
+                  assert b.execute('SELECT code FROM projects WHERE id=?',(pid,)).fetchone()[0]=='PILOT-CI'
+          p.compose(cfg,'up','-d','--no-build','--pull','never','--no-deps','--force-recreate','psc')
+          for i in range(45):
+              try: p.verify(cfg);break
+              except Exception: time.sleep(2)
+          p.verify(cfg)
+          req=urllib.request.Request('http://127.0.0.1:18090/api/projects/'+pid,headers={'Authorization':'Basic '+auth})
+          with p.HTTP.open(req) as r: assert json.load(r)['code']=='PILOT-CI'
+          assert p.run('docker','inspect','--format','{{.State.Running}}','psc-isolation-sentinel')=='true'
+          print('PASS: runtime isolation, authentication, independent sentinel, backup/restore, persistence after recreate')
+          PY
+      - name: Stop only PSC and confirm sentinel stays running
+        run: |
+          python3 bundle/pilot.py stop
+          test "$(docker inspect --format '{{.State.Running}}' psc-isolation-sentinel)" = true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: psc-isolated-pilot-${{ github.event.pull_request.head.sha }}
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            bundle/pilot.py
+            bundle/compose.pilot.yml
+            bundle/DEPLOYMENT.md
+            bundle/manifest.json
+            bundle/psc-image.tar.gz
