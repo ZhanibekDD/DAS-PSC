@@ -24,7 +24,7 @@ from app.store import Conflict, NotFound, Store
 
 BASE = Path(__file__).resolve().parent
 CONFIG = json.loads((BASE / "config/object_template.json").read_text(encoding="utf-8"))
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.5.0"
 
 
 class ProjectInput(BaseModel):
@@ -228,6 +228,11 @@ def create_app(data_dir: Path | None = None, password: str | None = None) -> Fas
     def confirm(request: Request, pid: str, iid: str):
         return {**store(request).confirm_import(pid, iid), "url": f"/projects/{pid}/documents"}
 
+    @app.post("/api/projects/{pid}/imports/{iid}/refresh")
+    def refresh_import_analysis(request: Request, pid: str, iid: str, values: ReclassifyInput):
+        result = store(request).apply_import_refresh(pid, iid, values.expected_token)
+        return {**result, "url": f"/projects/{pid}/documents?review=true"}
+
     @app.post("/api/projects/{pid}/imports/{iid}/cancel")
     def cancel(request: Request, pid: str, iid: str):
         store(request).cancel_import(pid, iid)
@@ -238,16 +243,23 @@ def create_app(data_dir: Path | None = None, password: str | None = None) -> Fas
         rows = store(request).documents(pid, page_size=2147483647)["items"]
         out = io.StringIO()
         writer = csv.writer(out)
-        writer.writerow(["Путь", "Категория", "Категория проверена", "Уверенность правил",
-                         "Причина", "Байт", "SHA-256", "Код (гипотеза)", "Ревизия (гипотеза)"])
+        writer.writerow([
+            "Путь", "Категория", "Категория проверена", "Уверенность правил", "Причина",
+            "Контент-анализ", "Текстовых символов", "Нужен OCR", "Байт", "SHA-256",
+            "Код (гипотеза)", "Ревизия (гипотеза)",
+        ])
 
         def safe(value):
             text = str(value if value is not None else "")
             return "'" + text if text.lstrip().startswith(("=", "+", "-", "@")) or text.startswith(("\t", "\r", "\n")) else text
 
         for r in rows:
-            writer.writerow([safe(r[k]) for k in ["path", "category", "reviewed", "score", "reason",
-                                                   "size", "sha256", "project_code", "revision"]])
+            values = [
+                r["path"], r["category"], r["reviewed"], r["score"], r["reason"],
+                r["content_status"], r["content_text_chars"], r["content_needs_ocr"],
+                r["size"], r["sha256"], r["project_code"], r["revision"],
+            ]
+            writer.writerow([safe(value) for value in values])
         return Response("\ufeff" + out.getvalue(), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": 'attachment; filename="psc-registry.csv"'})
 
