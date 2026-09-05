@@ -68,8 +68,8 @@ class ReviewInput(BaseModel):
 def create_app(data_dir: Path | None = None, password: str | None = None) -> FastAPI:
     directory = Path(data_dir or os.environ.get("PSC_DATA_DIR", "data"))
     shared_password = os.environ.get("PSC_PASSWORD", "") if password is None else password
-    if shared_password and len(shared_password) < 12:
-        raise RuntimeError("PSC_PASSWORD должен содержать минимум 12 символов")
+    if shared_password and len(shared_password) < 9:
+        raise RuntimeError("PSC_PASSWORD должен содержать минимум 9 символов")
 
     @asynccontextmanager
     async def lifespan(application):
