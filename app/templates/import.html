@@ -2,7 +2,7 @@
 {% block title %}Импорт документов · ПСК{% endblock %}
 {% block content %}
 <header class="object-header compact-header">
-  <div><a class="back-link" href="/projects/{{ project.id }}">← Обзор объекта</a><span class="kicker">{{ project.code }}</span><h1>Импорт документов</h1><p>{{ job.source }}</p></div>
+  <div><a class="back-link" href="/projects/{{ project.id }}">← Обзор объекта</a><span class="project-code">{{ project.code }}</span><h1>Импорт документов</h1><p>{{ job.source }}</p></div>
   <span class="pill {{ 'pill-ok' if job.status == 'confirmed' else 'pill-wait' }}">{{ {'pending':'Анализ завершён','confirmed':'Сохранено','cancelled':'Отменено'}[job.status] }}</span>
 </header>
 
@@ -13,13 +13,13 @@
 </section>
 
 <section class="result-summary">
-  <div class="result-title"><div class="completion-mark">✓</div><div><span class="kicker">Анализ завершён</span><h2>ПСК закончил разбор архива</h2><p>Теперь видно, что удалось прочитать автоматически и что потребует дополнительной проверки.</p></div></div>
-  <div class="metric-grid compact-metrics">
-    <article><span>Файлов</span><strong>{{ job.analysis.file_count }}</strong></article>
-    <article><span>Текст прочитан</span><strong>{{ job.analysis.content_text_files|default(0) }}</strong><small>PDF/DOCX</small></article>
-    <article><span>Нужен OCR</span><strong>{{ job.analysis.content_needs_ocr|default(0) }}</strong><small>сканы PDF</small></article>
-    <article><span>Неясная категория</span><strong>{{ job.analysis.review_count }}</strong><small>нужна проверка</small></article>
-  </div>
+  <div class="result-title"><div class="completion-mark">✓</div><div><span class="kicker">Результат анализа</span><h2>Архив разобран</h2><p>Ниже только итог: что удалось прочитать автоматически и что потребует дополнительной проверки.</p></div></div>
+  <section class="status-summary import-summary">
+    <span><b>{{ job.analysis.file_count }}</b><small>файлов</small></span>
+    <span><b>{{ job.analysis.content_text_files|default(0) }}</b><small>текст прочитан</small></span>
+    <span class="{{ 'summary-warning' if job.analysis.content_needs_ocr|default(0) else '' }}"><b>{{ job.analysis.content_needs_ocr|default(0) }}</b><small>нужен OCR</small></span>
+    <span class="{{ 'summary-warning' if job.analysis.review_count else '' }}"><b>{{ job.analysis.review_count }}</b><small>категория неясна</small></span>
+  </section>
 </section>
 
 {% if job.status == 'pending' %}
@@ -29,13 +29,13 @@
   <div class="stack-actions"><form data-request="/api/projects/{{ project.id }}/imports/{{ job.id }}/confirm"><button>Подтвердить и сохранить реестр</button><p class="form-message" role="status"></p></form><form data-request="/api/projects/{{ project.id }}/imports/{{ job.id }}/cancel"><button class="secondary">Отменить импорт</button><p class="form-message" role="status"></p></form></div>
 </section>
 {% elif job.status == 'confirmed' %}
-<section class="next-action success-action"><div class="action-number">✓</div><div><span class="kicker">Готово</span><h2>Результаты сохранены</h2><p>Можно перейти к очереди проверки документов.</p></div><a class="button" href="/projects/{{ project.id }}/documents?review=true">Открыть документы</a></section>
+<section class="next-action success-action"><div class="action-number">✓</div><div><span class="kicker">Готово</span><h2>Результаты сохранены</h2><p>Теперь можно перейти к очереди проверки документов.</p></div><a class="button" href="/projects/{{ project.id }}/documents?review=true">Открыть документы</a></section>
 {% endif %}
 
 {% if job.status == 'confirmed' and job.refresh and (job.refresh.analysis_updates or job.refresh.changed) %}
 <section class="next-action rule-refresh">
-  <div class="action-number">AI</div>
-  <div><span class="kicker">Новый разбор того же архива</span><h2>ПСК нашёл уточнения для существующего реестра</h2><p>Совпало {{ job.refresh.matched }} документов. Анализ обновится у {{ job.refresh.analysis_updates }}. Машинное предложение изменится у {{ job.refresh.changed }}. Защищено человеком: {{ job.refresh.protected }}.</p><details><summary>Показать примеры изменений</summary>{% if job.refresh.samples %}<div class="simple-change-list">{% for item in job.refresh.samples %}<div><b>{{ item.name }}</b><span>{{ item.from_category }} → {{ item.to_category }}</span></div>{% endfor %}</div>{% else %}<p>Категории не меняются — обновятся только результаты анализа.</p>{% endif %}</details></div>
+  <div class="action-number">↻</div>
+  <div><span class="kicker">Повторный анализ того же ZIP</span><h2>Есть уточнения для существующего реестра</h2><p>Совпало {{ job.refresh.matched }} документов. Анализ обновится у {{ job.refresh.analysis_updates }}. Машинное предложение изменится у {{ job.refresh.changed }}. Защищено человеком: {{ job.refresh.protected }}.</p><details><summary>Показать примеры изменений</summary>{% if job.refresh.samples %}<div class="simple-change-list">{% for item in job.refresh.samples %}<div><b>{{ item.name }}</b><span>{{ item.from_category }} → {{ item.to_category }}</span></div>{% endfor %}</div>{% else %}<p>Категории не меняются — обновятся только результаты анализа.</p>{% endif %}</details></div>
   <form data-request="/api/projects/{{ project.id }}/imports/{{ job.id }}/refresh" data-json="true" data-confirm="Применить результаты анализа к существующему реестру? Подтвержденные человеком записи не будут изменены."><input type="hidden" name="expected_token" value="{{ job.refresh.token }}"><button>Применить анализ содержания</button><p class="form-message" role="status"></p></form>
 </section>
 {% endif %}
