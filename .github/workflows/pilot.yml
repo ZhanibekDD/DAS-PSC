@@ -41,7 +41,7 @@ jobs:
           PY
       - name: Sentinel outside the pilot project
         run: |
-          docker run -d --name psc-isolation-sentinel --network none --memory 64m --cpus 0.1 --pids-limit 16 --entrypoint sleep psc-pilot-ci 600
+          docker run -d --name psc-isolation-sentinel --no-healthcheck --network none --memory 64m --cpus 0.1 --pids-limit 16 --entrypoint sleep psc-pilot-ci 600
       - name: Preflight and real isolated first launch
         env:
           SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
@@ -52,7 +52,7 @@ jobs:
       - name: SQLite backup restore and container recreation
         run: |
           python3 - <<'PY'
-          import importlib.util,json,sqlite3,tempfile,urllib.request,base64,time,pathlib
+          import importlib.util,json,sqlite3,tempfile,urllib.request,base64,time,pathlib,subprocess
           spec=importlib.util.spec_from_file_location('pilot','bundle/pilot.py')
           p=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)
           cfg=p.config();cid=p.own_id(cfg)
@@ -63,7 +63,11 @@ jobs:
           p.run('docker','exec',cid,'python','-c',code)
           with tempfile.TemporaryDirectory() as d:
               copy=pathlib.Path(d)/'copy.sqlite3'
-              p.run('docker','cp',cid+':/tmp/psc-backup.sqlite3',str(copy))
+              # Stream the backup from tmpfs; do not relax the read-only container.
+              with copy.open('wb') as out:
+                  subprocess.run(['docker','exec',cid,'python','-c',
+                      "import shutil,sys; shutil.copyfileobj(open('/tmp/psc-backup.sqlite3','rb'),sys.stdout.buffer)"],
+                      stdout=out,check=True,timeout=30)
               with sqlite3.connect(copy) as a,sqlite3.connect(pathlib.Path(d)/'restored.sqlite3') as b:
                   a.backup(b)
                   assert b.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
