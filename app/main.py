@@ -71,6 +71,10 @@ class BulkReviewInput(BaseModel):
     category: str = Field(default="", max_length=200)
 
 
+class ReclassifyInput(BaseModel):
+    expected_token: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+
+
 def create_app(data_dir: Path | None = None, password: str | None = None) -> FastAPI:
     directory = Path(data_dir or os.environ.get("PSC_DATA_DIR", "data"))
     shared_password = os.environ.get("PSC_PASSWORD", "") if password is None else password
@@ -148,6 +152,7 @@ def create_app(data_dir: Path | None = None, password: str | None = None) -> Fas
             review=review,
             duplicates=duplicates,
             summary=db.summary(pid),
+            reclass=db.reclassification_preview(pid),
         )
 
     @app.get("/projects/{pid}/imports/{iid}", response_class=HTMLResponse)
@@ -181,8 +186,15 @@ def create_app(data_dir: Path | None = None, password: str | None = None) -> Fas
                       page_size: int = Query(default=100, ge=1, le=200)):
         return store(request).documents(pid, q, category, review, duplicates, page, page_size)
 
-    # Keep the fixed path before /documents/{did}, otherwise "bulk-review" would be
-    # interpreted as a document id and fail integer validation.
+    @app.get("/api/projects/{pid}/documents/reclassify-preview")
+    def reclassify_preview(request: Request, pid: str):
+        return store(request).reclassification_preview(pid)
+
+    @app.post("/api/projects/{pid}/documents/reclassify")
+    def reclassify_documents(request: Request, pid: str, values: ReclassifyInput):
+        result = store(request).apply_reclassification(pid, values.expected_token)
+        return {**result, "url": f"/projects/{pid}/documents?review=true"}
+
     @app.post("/api/projects/{pid}/documents/bulk-review")
     def bulk_review_documents(request: Request, pid: str, values: BulkReviewInput):
         result = store(request).bulk_review(pid, values.min_score, values.category)
