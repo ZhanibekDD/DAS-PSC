@@ -37,14 +37,12 @@ def stages(request: Request, pid: str):
 
 @router.post("/api/projects/{pid}/stages", status_code=201)
 def new_stage(request: Request, pid: str, values: StageInput):
-    row = control(request).save_stage(pid, values)
-    return {**row, "url": f"/projects/{pid}/control#stage-{row['id']}"}
+    return control(request).save_stage(pid, values)
 
 
 @router.patch("/api/projects/{pid}/stages/{sid}")
 def edit_stage(request: Request, pid: str, sid: int, values: StageUpdate):
-    row = control(request).save_stage(pid, values, sid)
-    return {**row, "url": f"/projects/{pid}/control#stage-{row['id']}"}
+    return control(request).save_stage(pid, values, sid)
 
 
 @router.get("/api/projects/{pid}/prescriptions")
@@ -55,11 +53,9 @@ def issues(request: Request, pid: str, status: str = Query(default="", max_lengt
 
 @router.post("/api/projects/{pid}/prescriptions", status_code=201)
 def new_issue(request: Request, pid: str, values: IssueInput):
-    row = control(request).save_issue(pid, values)
-    return {**row, "url": f"/projects/{pid}/control#issues"}
+    return control(request).save_issue(pid, values)
 
 
 @router.patch("/api/projects/{pid}/prescriptions/{iid}")
 def edit_issue(request: Request, pid: str, iid: int, values: IssueUpdate):
-    row = control(request).save_issue(pid, values, iid)
-    return {**row, "url": f"/projects/{pid}/control#issues"}
+    return control(request).save_issue(pid, values, iid)
