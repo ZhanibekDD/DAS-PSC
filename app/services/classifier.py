@@ -44,20 +44,40 @@ RULES = [
 ]
 PROJECT_CODE_RE = re.compile(r"[А-ЯA-Z0-9]+(?:-[А-ЯA-Z0-9.]+){2,}", re.IGNORECASE)
 REVISION_RE = re.compile(r"(?:[_-](\d{1,2}))(?=\.[^.]+$)")
-PROJECT_HINTS = ("рабочая документац", "проектная документац", "чертеж", "чертёж", "спецификац")
+PROJECT_HINTS = (
+    "рабочая документац",
+    "проектная документац",
+    "раздел пд",
+    "раздел рд",
+    "чертеж",
+    "чертёж",
+    "спецификац",
+)
+SERVICE_SUFFIXES = {".bak", ".tmp", ".temp", ".swp", ".swo", ".old", ".orig", ".autosave"}
+POS_RE = re.compile(r"(?:^|[\s._()№\-])пос(?:$|[\s._()№\-])", re.IGNORECASE)
 
 
 def classify_path(path: str) -> Classification:
     normalized = path.replace("\\", "/").casefold().replace("ё", "е")
     name = PurePosixPath(normalized).name
     suffix = PurePosixPath(name).suffix
-    if name in {"thumbs.db", ".ds_store"} or "__macosx/" in normalized:
-        return Classification(SERVICE, 1.0, "служебный файл ОС")
+
+    if (
+        name in {"thumbs.db", ".ds_store"}
+        or "__macosx/" in normalized
+        or suffix in SERVICE_SUFFIXES
+    ):
+        return Classification(SERVICE, 1.0, "служебный/резервный файл")
 
     # Explicit document context outranks extension: a scanned certificate is not a site photo.
     for category, hints, score in RULES:
         if any(hint in normalized for hint in hints):
             return Classification(category, score, f"имя/путь: {category}")
+
+    # Explicit PD/RD/POS wording is stronger than a generic engineering code.
+    if suffix in {".pdf", ".doc", ".docx", ".dwg", ".dxf", ".xls", ".xlsx", ".xlsm"}:
+        if any(hint in normalized for hint in PROJECT_HINTS) or POS_RE.search(name):
+            return Classification("Проект", 0.92, "явный признак проектной/рабочей документации")
 
     # A generic image outside an explicitly named photo folder is deliberately low
     # confidence: it can be a scan of a document, scheme, passport, etc.
@@ -66,12 +86,16 @@ def classify_path(path: str) -> Classification:
 
     has_code = bool(PROJECT_CODE_RE.search(name))
     if suffix in {".pdf", ".dwg", ".dxf", ".xls", ".xlsx", ".xlsm"} and has_code:
-        if any(hint in normalized for hint in PROJECT_HINTS) or "/проект/" in f"/{normalized}":
-            return Classification("Проект", 0.93, "проектный контекст и инженерный шифр")
+        if "/проект/" in f"/{normalized}":
+            return Classification("Проект", 0.93, "папка проекта и инженерный шифр")
         return Classification("Проект", 0.82, "инженерный шифр; раздел нужно подтвердить")
 
     if suffix in {".dwg", ".dxf"} or "/проект/" in f"/{normalized}":
         return Classification("Проект", 0.78, "CAD или папка проекта; требуется проверка")
+
+    # "Модель" is useful for engineering exports but still too broad for auto-confirmation.
+    if suffix in {".pdf", ".dwg", ".dxf"} and "модель" in normalized:
+        return Classification("Проект", 0.72, "инженерная модель; требуется проверка")
 
     return Classification(UNKNOWN, 0.30, "недостаточно признаков в имени/пути")
 
