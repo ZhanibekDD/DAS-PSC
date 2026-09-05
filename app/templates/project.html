@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} · DAS-PSC{% endblock %}
+{% block content %}
+<header class="page-head"><div><p class="eyebrow">Объекты / {{ project.code }}</p><h1>{{ project.name }}</h1><p>Единая карточка состояния объекта.</p></div><span class="badge">{{ project.status }}</span></header>
+<section class="object-grid">
+  <article class="panel overview">
+    <h3>Паспорт объекта</h3>
+    <dl><div><dt>Код проекта</dt><dd>{{ project.code }}</dd></div><div><dt>Заказчик</dt><dd>Не указан</dd></div><div><dt>Подрядчик</dt><dd>Не указан</dd></div><div><dt>NAS-папка</dt><dd>Не подключена</dd></div></dl>
+  </article>
+  <article class="panel"><h3>Ход строительства</h3><strong class="huge">{{ project.progress }}%</strong><div class="progress"><i style="width: {{ project.progress }}%"></i></div><p class="muted">Следующий этап будет связан с контрольными документами и фото.</p></article>
+</section>
+<section class="panel"><div class="section-title"><div><p class="eyebrow">Контроль</p><h2>Комплектность документации</h2></div><strong class="score">{{ project.completeness.percent }}%</strong></div>
+<div class="check-grid">{% for item in project.completeness.items %}<div class="check-item {{ 'ok' if item.present else 'missing' }}"><span>{{ '✓' if item.present else '!' }}</span><div><b>{{ item.category }}</b><small>{{ item.count }} файл(ов)</small></div></div>{% endfor %}</div>
+</section>
+<section class="panel"><p class="eyebrow">Следующий шаг</p><h2>Из прототипа — в рабочий объект</h2><p>Подключаем реальный ZIP/NAS, сохраняем реестр в БД и добавляем подтверждение предложенного размещения файлов.</p></section>
+{% endblock %}
