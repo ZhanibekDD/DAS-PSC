@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.services.classifier import classify_path, confidence_level
+from test_content_analyzer import make_docx
 from test_zip_analyzer import make_zip
 
 WRITE = {"X-PSC-Request": "1"}
@@ -180,3 +181,74 @@ def test_reclassification_preview_is_atomic_and_protects_human_touched_rows(tmp_
         assert final["паспорт трубы.pdf"]["reviewed"] == 0
         assert final["notes.bin"]["category"] == "На ручную проверку"
         assert final["notes.bin"]["version"] == 2
+
+
+def test_reupload_same_zip_refreshes_content_but_protects_human_review(tmp_path):
+    with TestClient(create_app(tmp_path, password="")) as client:
+        pid = create_project(client)
+        files = {
+            "unknown-a.docx": make_docx("СЕРТИФИКАТ КАЧЕСТВА synthetic A"),
+            "unknown-b.docx": make_docx("СЕРТИФИКАТ СООТВЕТСТВИЯ synthetic B"),
+        }
+        raw = make_zip(files).getvalue()
+        staged = client.post(
+            f"/api/projects/{pid}/imports",
+            files={"file": ("same.zip", raw)},
+            headers=WRITE,
+        )
+        iid = staged.json()["id"]
+        assert client.post(f"/api/projects/{pid}/imports/{iid}/confirm", headers=WRITE).status_code == 200
+
+        # Simulate the exact same registry having been created by v0.4: no stored
+        # content metadata and weak path-only suggestions.
+        with sqlite3.connect(tmp_path / "psc.sqlite3") as db:
+            db.execute("DELETE FROM document_analysis")
+            db.execute(
+                "UPDATE documents SET suggested_category='На ручную проверку',category='На ручную проверку',"
+                "score=.30,reason='старый анализ только имени',reviewed=0,version=1"
+            )
+
+        rows = client.get(f"/api/projects/{pid}/documents").json()["items"]
+        by_name = {row["name"]: row for row in rows}
+        human = by_name["unknown-b.docx"]
+        assert client.patch(
+            f"/api/projects/{pid}/documents/{human['id']}",
+            json={"category": "Проект", "version": human["version"]},
+            headers=WRITE,
+        ).status_code == 200
+
+        restaged = client.post(
+            f"/api/projects/{pid}/imports",
+            files={"file": ("same.zip", raw)},
+            headers=WRITE,
+        )
+        assert restaged.status_code == 201
+        assert restaged.json()["id"] == iid
+
+        job = client.app.state.store.import_info(pid, iid)
+        refresh = job["refresh"]
+        assert refresh["analysis_updates"] == 2
+        assert refresh["changed"] == 1
+        assert refresh["protected"] == 1
+        assert refresh["content_text_files"] == 2
+
+        applied = client.post(
+            f"/api/projects/{pid}/imports/{iid}/refresh",
+            json={"expected_token": refresh["token"]},
+            headers=WRITE,
+        )
+        assert applied.status_code == 200, applied.text
+        assert applied.json()["analysis_updated"] == 2
+        assert applied.json()["changed"] == 1
+        assert applied.json()["protected"] == 1
+
+        final_rows = client.get(f"/api/projects/{pid}/documents").json()["items"]
+        final = {row["name"]: row for row in final_rows}
+        assert final["unknown-a.docx"]["category"] == "Сертификаты и паспорта"
+        assert final["unknown-a.docx"]["content_status"] == "text"
+        assert final["unknown-b.docx"]["category"] == "Проект"
+        assert final["unknown-b.docx"]["reviewed"] == 1
+        assert final["unknown-b.docx"]["version"] == 2
+        summary = client.get(f"/api/projects/{pid}").json()["summary"]
+        assert summary["content_text"] == 2
+        assert summary["content_not_analyzed"] == 0
