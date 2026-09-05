@@ -11,12 +11,14 @@
     <label>Готовность, %<input type="number" name="progress" value="{{ s.get('progress',0) }}" min="0" max="100" step="1" required></label>
     <label>Плановый срок<input type="date" name="due_date" value="{{ s.get('due_date','') }}"></label>
   </div>
+  {% if s.id %}
   <details class="inline-advanced"><summary>Дополнительные поля</summary><div class="form-grid">
     <label>Предшествующий этап<select name="predecessor_id"><option value="">Нет зависимости</option>{% for p in stages if p.id != s.get('id') %}<option value="{{ p.id }}" {% if p.id == s.get('predecessor_id') %}selected{% endif %}>#{{ p.id }} · {{ p.name }} · {{ p.location }}</option>{% endfor %}</select></label>
     <label>Плановое начало<input type="date" name="start_date" value="{{ s.get('start_date','') }}"></label>
     <label>ID связанного документа<input type="number" name="document_id" value="{{ s.get('document_id') or '' }}" min="1" step="1" placeholder="Необязательно"></label>
     <label>Примечание<textarea name="note" maxlength="2000" rows="2">{{ s.get('note','') }}</textarea></label>
   </div></details>
+  {% endif %}
   <button>{{ 'Сохранить этап' if s.id else 'Добавить этап' }}</button><p class="form-message" role="status"></p>
 </form>
 {% endmacro %}
@@ -31,12 +33,14 @@
   </div>
   <label>Описание<textarea name="description" maxlength="4000" rows="3">{{ i.get('description','') }}</textarea></label>
   <label>Что сделали для устранения<textarea name="resolution" maxlength="4000" rows="3">{{ i.get('resolution','') }}</textarea></label>
+  <label class="checkbox"><input type="checkbox" name="blocking" {% if i.get('blocking') %}checked{% endif %}>Блокирует этап работ</label>
+  {% if i.id %}
   <details class="inline-advanced"><summary>Дополнительные поля</summary><div class="form-grid">
     <label>Связанный этап<select name="stage_id"><option value="">Весь объект</option>{% for s in stages %}<option value="{{ s.id }}" {% if s.id == i.get('stage_id') %}selected{% endif %}>#{{ s.id }} · {{ s.name }}</option>{% endfor %}</select></label>
     <label>ID подтверждающего документа<input type="number" name="document_id" value="{{ i.get('document_id') or '' }}" min="1" step="1"></label>
     <label>Кто проверил<input name="verified_by" value="{{ i.get('verified_by','') }}" maxlength="200" placeholder="Для закрытия"></label>
-    <label class="checkbox"><input type="checkbox" name="blocking" {% if i.get('blocking') %}checked{% endif %}>Блокирует этап работ</label>
   </div></details>
+  {% endif %}
   <button>{{ 'Сохранить предписание' if i.id else 'Добавить предписание' }}</button><p class="form-message" role="status"></p>
 </form>
 {% endmacro %}
