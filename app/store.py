@@ -3,12 +3,19 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from app.services.classifier import UNKNOWN, SERVICE
+from app.services.classifier import (
+    HIGH_CONFIDENCE,
+    MEDIUM_CONFIDENCE,
+    SERVICE,
+    UNKNOWN,
+    confidence_level,
+)
 from app.services.completeness import build_completeness
 
 
@@ -94,6 +101,17 @@ class Store:
     def event(db, project_id: str, kind: str, detail: str):
         db.execute("INSERT INTO events(project_id,kind,detail,created_at) VALUES(?,?,?,?)",
                    (project_id, kind, detail, now()))
+
+    @staticmethod
+    def decorate_document(row) -> dict:
+        item = dict(row)
+        item["confidence_level"] = confidence_level(float(item["score"]))
+        item["confidence_text"] = {
+            "high": "Высокая",
+            "medium": "Средняя",
+            "low": "Низкая",
+        }[item["confidence_level"]]
+        return item
 
     def create_project(self, values: dict) -> dict:
         pid = uuid4().hex
@@ -208,11 +226,54 @@ class Store:
             where.append("sha256 IN (SELECT sha256 FROM documents WHERE project_id=? GROUP BY sha256 HAVING COUNT(*)>1)")
             params.append(pid)
         clause = " AND ".join(where)
+        order = "sha256,path,id" if duplicates else "path,id"
         with self.connect() as db:
             total = db.execute(f"SELECT COUNT(*) FROM documents WHERE {clause}", params).fetchone()[0]
-            rows = db.execute(f"SELECT * FROM documents WHERE {clause} ORDER BY path,id LIMIT ? OFFSET ?",
+            rows = db.execute(f"SELECT * FROM documents WHERE {clause} ORDER BY {order} LIMIT ? OFFSET ?",
                               [*params, page_size, (page - 1) * page_size]).fetchall()
-        return {"items": [dict(r) for r in rows], "total": total, "page": page, "page_size": page_size}
+        return {"items": [self.decorate_document(r) for r in rows], "total": total,
+                "page": page, "page_size": page_size}
+
+    def duplicate_groups(self, pid: str, q: str = "", category: str = "", review: bool = False,
+                         page: int = 1, page_size: int = 25) -> dict:
+        """Group byte-identical files by SHA-256. Filters select groups; all copies are shown."""
+        self.project(pid)
+        where, params = ["d.project_id=?"], [pid]
+        if q:
+            where.append("instr(casefold(d.path),?)>0")
+            params.append(q.casefold())
+        if category:
+            where.append("d.category=?")
+            params.append(category)
+        if review:
+            where.append("d.reviewed=0 AND d.category!=?")
+            params.append(SERVICE)
+        where.append("d.sha256 IN (SELECT sha256 FROM documents WHERE project_id=? GROUP BY sha256 HAVING COUNT(*)>1)")
+        params.append(pid)
+        clause = " AND ".join(where)
+        with self.connect() as db:
+            total = db.execute(
+                f"SELECT COUNT(*) FROM (SELECT d.sha256 FROM documents d WHERE {clause} GROUP BY d.sha256)",
+                params,
+            ).fetchone()[0]
+            hashes = [r[0] for r in db.execute(
+                f"SELECT d.sha256 FROM documents d WHERE {clause} GROUP BY d.sha256 "
+                "ORDER BY MIN(d.path),d.sha256 LIMIT ? OFFSET ?",
+                [*params, page_size, (page - 1) * page_size],
+            ).fetchall()]
+            rows = []
+            if hashes:
+                marks = ",".join("?" for _ in hashes)
+                rows = db.execute(
+                    f"SELECT * FROM documents WHERE project_id=? AND sha256 IN ({marks}) ORDER BY sha256,path,id",
+                    [pid, *hashes],
+                ).fetchall()
+        by_hash = {digest: [] for digest in hashes}
+        for row in rows:
+            by_hash[row["sha256"]].append(self.decorate_document(row))
+        groups = [{"sha256": digest, "count": len(by_hash[digest]), "items": by_hash[digest]}
+                  for digest in hashes]
+        return {"groups": groups, "total": total, "page": page, "page_size": page_size}
 
     def review(self, pid: str, did: int, category: str, version: int):
         if category not in [*self.categories, UNKNOWN, SERVICE]:
@@ -227,21 +288,79 @@ class Store:
                 raise Conflict("Документ изменен другим пользователем. Обновите страницу")
             self.event(db, pid, "document_reviewed", f"Документ #{did}: {row[0]} → {category}")
 
+    def bulk_review(self, pid: str, min_score: float = HIGH_CONFIDENCE, category: str = "") -> dict:
+        """Confirm only unchanged machine suggestions above the requested conservative score."""
+        self.project(pid)
+        if category and category not in self.categories:
+            raise ValueError("Неизвестная категория")
+        where = ["project_id=?", "reviewed=0", "category=suggested_category", "score>=?",
+                 "category NOT IN (?,?)"]
+        params: list = [pid, min_score, UNKNOWN, SERVICE]
+        if category:
+            where.append("category=?")
+            params.append(category)
+        with self.connect(True) as db:
+            clause = " AND ".join(where)
+            changed = db.execute(
+                f"UPDATE documents SET reviewed=1,version=version+1 WHERE {clause}", params
+            ).rowcount
+            if changed:
+                scope = f" в категории «{category}»" if category else ""
+                self.event(db, pid, "documents_bulk_reviewed",
+                           f"Массово подтверждено предложений: {changed}{scope}; порог правил {min_score:.2f}")
+        return {"changed": changed}
+
     def summary(self, pid: str) -> dict:
         self.project(pid)
         with self.connect() as db:
-            rows = db.execute("SELECT category,reviewed,size,sha256 FROM documents WHERE project_id=?", (pid,)).fetchall()
-            duplicate_groups = db.execute("SELECT COUNT(*) FROM (SELECT sha256 FROM documents WHERE project_id=? GROUP BY sha256 HAVING COUNT(*)>1)", (pid,)).fetchone()[0]
+            rows = db.execute(
+                "SELECT category,suggested_category,reviewed,size,sha256,score FROM documents WHERE project_id=?",
+                (pid,),
+            ).fetchall()
+            duplicate_groups = db.execute(
+                "SELECT COUNT(*) FROM (SELECT sha256 FROM documents WHERE project_id=? GROUP BY sha256 HAVING COUNT(*)>1)",
+                (pid,),
+            ).fetchone()[0]
         meaningful = [r for r in rows if r["category"] != SERVICE and r["size"] > 0]
         report = build_completeness([r["category"] for r in meaningful], self.categories)
         for item in report["items"]:
-            item["reviewed"] = sum(r["category"] == item["category"] and r["reviewed"] for r in meaningful)
-        return {"documents": len(rows), "review": sum(not r["reviewed"] for r in meaningful),
-                "unknown": sum(r["category"] == UNKNOWN for r in meaningful),
-                "service": sum(r["category"] == SERVICE for r in rows),
-                "empty_files": sum(r["size"] == 0 for r in rows),
-                "unique_hashes": len({r["sha256"] for r in rows}),
-                "duplicate_groups": duplicate_groups, "coverage": report}
+            cat_rows = [r for r in meaningful if r["category"] == item["category"]]
+            item["reviewed"] = sum(bool(r["reviewed"]) for r in cat_rows)
+            item["pending"] = sum(not r["reviewed"] for r in cat_rows)
+            item["high_pending"] = sum(
+                not r["reviewed"] and r["score"] >= HIGH_CONFIDENCE for r in cat_rows
+            )
+        confirmed_sections = sum(item["reviewed"] > 0 for item in report["items"])
+        high_pending = sum(
+            not r["reviewed"] and r["category"] not in {UNKNOWN, SERVICE}
+            and r["score"] >= HIGH_CONFIDENCE for r in meaningful
+        )
+        medium_pending = sum(
+            not r["reviewed"] and r["category"] not in {UNKNOWN, SERVICE}
+            and MEDIUM_CONFIDENCE <= r["score"] < HIGH_CONFIDENCE for r in meaningful
+        )
+        low_pending = sum(
+            not r["reviewed"] and (r["category"] == UNKNOWN or r["score"] < MEDIUM_CONFIDENCE)
+            for r in meaningful
+        )
+        hash_counts = Counter(r["sha256"] for r in rows)
+        duplicate_files = sum(count for count in hash_counts.values() if count > 1)
+        return {
+            "documents": len(rows),
+            "review": sum(not r["reviewed"] for r in meaningful),
+            "unknown": sum(r["category"] == UNKNOWN for r in meaningful),
+            "service": sum(r["category"] == SERVICE for r in rows),
+            "empty_files": sum(r["size"] == 0 for r in rows),
+            "unique_hashes": len(hash_counts),
+            "duplicate_groups": duplicate_groups,
+            "duplicate_files": duplicate_files,
+            "high_pending": high_pending,
+            "medium_pending": medium_pending,
+            "low_pending": low_pending,
+            "auto_confirmable": high_pending,
+            "confirmed_sections": confirmed_sections,
+            "coverage": report,
+        }
 
     def activity(self, pid: str) -> dict:
         with self.connect() as db:
