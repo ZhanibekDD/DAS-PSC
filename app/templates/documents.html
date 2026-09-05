@@ -32,7 +32,7 @@
     {% if reclass.transitions %}<div class="transition-list">{% for t in reclass.transitions %}<span>{{ t['from'] }} → {{ t['to'] }} · {{ t.count }}</span>{% endfor %}</div>{% endif %}
     {% if reclass.samples %}<div class="table-wrap"><table class="refresh-table"><thead><tr><th>Файл</th><th>Было</th><th>Станет</th></tr></thead><tbody>{% for item in reclass.samples %}<tr><td><b>{{ item.name }}</b><small class="path">{{ item.path }}</small></td><td>{{ item.from_category }}<small>{{ '%.2f'|format(item.from_score) }}</small></td><td>{{ item.to_category }}<small>{{ '%.2f'|format(item.to_score) }} · {{ item.reason }}</small></td></tr>{% endfor %}</tbody></table></div>{% endif %}
   </details>
-  <small>Пересчет использует только сохраненный путь и имя файла. ZIP повторно загружать не нужно. Содержание PDF/DWG не читается.</small>
+  <small>Пересчет использует только сохраненный путь и имя файла. ZIP повторно загружать не нужно. Содержание PDF/DWG не читается. Пока этот пересчет не выполнен, массовое подтверждение категорий отключено.</small>
 </section>
 {% endif %}
 
@@ -43,7 +43,7 @@
       <h2>Что требует внимания</h2>
       <p><b>{{ summary.high_pending }}</b> предложений высокой уверенности · <b>{{ summary.medium_pending }}</b> средней · <b>{{ summary.low_pending }}</b> низкой/неопределенной · <b>{{ summary.unknown }}</b> без категории.</p>
     </div>
-    {% if summary.auto_confirmable %}
+    {% if summary.auto_confirmable and not reclass.changed %}
     <form data-request="/api/projects/{{ project.id }}/documents/bulk-review" data-json="true" data-confirm="Подтвердить {{ summary.auto_confirmable }} предложений высокой уверенности? Это подтвердит только неизмененные предложения правил с оценкой не ниже 0.90.">
       <input type="hidden" name="min_score" value="0.90">
       <input type="hidden" name="category" value="">
@@ -52,7 +52,7 @@
     </form>
     {% endif %}
   </div>
-  <small>Массовое подтверждение не затрагивает «На ручную проверку», служебные файлы, среднюю и низкую уверенность. Проектные шифры без явного контекста остаются на ручной проверке.</small>
+  {% if reclass.changed %}<small>Сначала примените показанный выше пересчет правил; затем появится безопасная кнопка массового подтверждения высокой уверенности.</small>{% else %}<small>Массовое подтверждение не затрагивает «На ручную проверку», служебные файлы, среднюю и низкую уверенность. Проектные шифры без явного контекста остаются на ручной проверке.</small>{% endif %}
 </section>
 
 <form class="panel filters" method="get">
