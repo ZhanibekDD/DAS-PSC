@@ -1,3 +1,5 @@
+import sqlite3
+
 from fastapi.testclient import TestClient
 
 from app.main import create_app
@@ -111,3 +113,70 @@ def test_bulk_review_can_be_scoped_to_one_category(tmp_path):
         assert response.json()["changed"] == 1
         summary = client.get(f"/api/projects/{pid}").json()["summary"]
         assert summary["high_pending"] == 1
+
+
+def test_reclassification_preview_is_atomic_and_protects_human_touched_rows(tmp_path):
+    with TestClient(create_app(tmp_path, password="")) as client:
+        pid = create_project(client)
+        import_files(client, pid, {
+            "Сертификаты/паспорт трубы.pdf": b"certificate",
+            "notes.bin": b"unknown",
+        })
+        rows = client.get(f"/api/projects/{pid}/documents").json()["items"]
+        by_name = {row["name"]: row for row in rows}
+        cert = by_name["паспорт трубы.pdf"]
+        unknown = by_name["notes.bin"]
+
+        # A human can explicitly leave a document in the manual-review bucket. The
+        # optimistic version increments, so future rule refreshes must not touch it.
+        response = client.patch(
+            f"/api/projects/{pid}/documents/{unknown['id']}",
+            json={"category": "На ручную проверку", "version": unknown["version"]},
+            headers=WRITE,
+        )
+        assert response.status_code == 200
+
+        # Simulate rows imported by an older classifier without re-uploading the ZIP.
+        with sqlite3.connect(tmp_path / "psc.sqlite3") as db:
+            db.execute(
+                "UPDATE documents SET suggested_category='Проект',category='Проект',score=.82,reason='старые правила' WHERE id=?",
+                (cert["id"],),
+            )
+
+        preview = client.get(f"/api/projects/{pid}/documents/reclassify-preview")
+        assert preview.status_code == 200
+        data = preview.json()
+        assert data["eligible"] == 1
+        assert data["changed"] == 1
+        assert data["protected"] == 1
+        assert data["samples"][0]["to_category"] == "Сертификаты и паспорта"
+        assert "Обновить предложения для существующего реестра" in client.get(
+            f"/projects/{pid}/documents"
+        ).text
+
+        # The apply token rejects a stale preview instead of silently overwriting a
+        # concurrent change.
+        with sqlite3.connect(tmp_path / "psc.sqlite3") as db:
+            db.execute("UPDATE documents SET reason='изменено после предпросмотра' WHERE id=?", (cert["id"],))
+        stale = client.post(
+            f"/api/projects/{pid}/documents/reclassify",
+            json={"expected_token": data["token"]},
+            headers=WRITE,
+        )
+        assert stale.status_code == 409
+
+        fresh = client.get(f"/api/projects/{pid}/documents/reclassify-preview").json()
+        applied = client.post(
+            f"/api/projects/{pid}/documents/reclassify",
+            json={"expected_token": fresh["token"]},
+            headers=WRITE,
+        )
+        assert applied.status_code == 200, applied.text
+        assert applied.json()["changed"] == 1
+
+        final_rows = client.get(f"/api/projects/{pid}/documents").json()["items"]
+        final = {row["name"]: row for row in final_rows}
+        assert final["паспорт трубы.pdf"]["category"] == "Сертификаты и паспорта"
+        assert final["паспорт трубы.pdf"]["reviewed"] == 0
+        assert final["notes.bin"]["category"] == "На ручную проверку"
+        assert final["notes.bin"]["version"] == 2
