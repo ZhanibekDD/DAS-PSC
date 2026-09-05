@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Объекты · DAS-PSC{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div><p class="eyebrow">ПСК / Объекты</p><h1>Контроль строительных объектов</h1><p>Документы, комплектность, этапы и проблемы — в одной карточке.</p></div>
+  <button>+ Добавить объект</button>
+</header>
+<section class="stats">
+  <article><span>Объекты</span><strong>1</strong><small>1 в работе</small></article>
+  <article><span>Комплектность</span><strong>{{ project.completeness.percent }}%</strong><small>{{ project.completeness.present }} из {{ project.completeness.total }} разделов</small></article>
+  <article><span>Документы</span><strong>{{ project.documents }}</strong><small>распознано</small></article>
+  <article><span>Требует внимания</span><strong>{{ project.completeness.missing|length }}</strong><small>отсутствующих разделов</small></article>
+</section>
+<a class="project-card" href="/projects/demo">
+  <div class="project-top"><div><span class="badge">{{ project.status }}</span><h2>{{ project.name }}</h2><p>{{ project.code }}</p></div><span class="arrow">→</span></div>
+  <div class="progress-row"><span>Ход строительства</span><b>{{ project.progress }}%</b></div>
+  <div class="progress"><i style="width: {{ project.progress }}%"></i></div>
+  <div class="project-metrics"><span><b>{{ project.documents }}</b> документов</span><span><b>{{ project.completeness.percent }}%</b> комплектность</span><span><b>{{ project.completeness.missing|length }}</b> пробелов</span></div>
+</a>
+<section class="upload-box">
+  <div><p class="eyebrow">ИИ-разбор</p><h2>Загрузить ZIP объекта</h2><p>ПСК построит реестр файлов, категории, SHA-256 дубликаты и комплектность. Исходники не перемещаются.</p></div>
+  <form id="zipForm"><input id="zipInput" type="file" name="file" accept=".zip" required><button type="submit">Анализировать ZIP</button></form>
+  <pre id="zipResult" hidden></pre>
+</section>
+<script>
+const form=document.getElementById('zipForm');
+form.addEventListener('submit',async(e)=>{e.preventDefault();const out=document.getElementById('zipResult');out.hidden=false;out.textContent='Анализируем…';const data=new FormData(form);const r=await fetch('/api/analyze-zip',{method:'POST',body:data});const j=await r.json();out.textContent=r.ok?`Файлов: ${j.file_count}\nКомплектность: ${j.completeness.percent}%\nНа ручную проверку: ${j.review_count}\nГрупп дублей: ${j.duplicate_groups.length}\nНе хватает: ${j.completeness.missing.join(', ') || 'ничего'}`:`Ошибка: ${j.detail}`;});
+</script>
+{% endblock %}
