@@ -23,7 +23,8 @@ jobs:
           docker build --label org.opencontainers.image.revision="$SOURCE_SHA" -t psc-pilot-ci .
           mkdir -m 700 bundle
           cp deploy/pilot.py deploy/compose.pilot.yml deploy/DEPLOYMENT.md bundle/
-          docker save psc-pilot-ci | gzip > bundle/psc-image.tar.gz
+          IMAGE_ID=$(docker image inspect --format '{{.Id}}' psc-pilot-ci)
+          docker save "$IMAGE_ID" | gzip > bundle/psc-image.tar.gz
           python3 - <<'PY'
           import hashlib,json,os,pathlib,subprocess
           d=pathlib.Path('bundle')

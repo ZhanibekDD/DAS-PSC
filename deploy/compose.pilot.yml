@@ -38,6 +38,8 @@ services:
     stop_grace_period: 30s
 networks:
   psc_only:
-    internal: true
+    # A normal dedicated bridge is needed for localhost port publishing.
+    # It is NOT an outbound firewall; no other service joins this network.
+    driver: bridge
 volumes:
   psc_data:

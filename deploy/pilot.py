@@ -181,7 +181,9 @@ def validate_runtime(item, cfg, network):
              h["Runtime"] == "runc", not h.get("Devices"), not h.get("DeviceRequests"),
              "ALL" in h["CapDrop"], "no-new-privileges:true" in h["SecurityOpt"],
              h["PortBindings"] == {"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(cfg["port"])}]},
-             set(item["NetworkSettings"]["Networks"]) == {NETWORK}, network["Internal"],
+             set(item["NetworkSettings"]["Networks"]) == {NETWORK},
+             network["Driver"] == "bridge", not network["Internal"],
+             item["NetworkSettings"]["Ports"] == h["PortBindings"],
              h["LogConfig"]["Config"].get("max-size") == "10m",
              h["LogConfig"]["Config"].get("max-file") == "3"]
     volumes = [m for m in item["Mounts"] if m["Type"] != "tmpfs"]

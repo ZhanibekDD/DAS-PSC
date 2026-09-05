@@ -22,8 +22,9 @@ def example():
             "PortBindings":{"8080/tcp":[{"HostIp":"127.0.0.1","HostPort":"18090"}]},
             "LogConfig":{"Config":{"max-size":"10m","max-file":"3"}}},
         "Mounts":[{"Type":"volume","Name":p.VOLUME,"Destination":"/data"}],
-        "NetworkSettings":{"Networks":{p.NETWORK:{}}}}
-    return item,cfg,{"Internal":True}
+        "NetworkSettings":{"Networks":{p.NETWORK:{}},
+            "Ports":{"8080/tcp":[{"HostIp":"127.0.0.1","HostPort":"18090"}]}}}
+    return item,cfg,{"Internal":False,"Driver":"bridge"}
 
 
 def test_runtime_policy_accepts_expected_config():
@@ -49,7 +50,7 @@ def test_runtime_policy_no_shared_mounts_or_network():
     item["NetworkSettings"]["Networks"]["dnepr_default"]={}
     with pytest.raises(p.Blocked): p.validate_runtime(item,cfg,network)
     item,cfg,network=example()
-    with pytest.raises(p.Blocked): p.validate_runtime(item,cfg,{"Internal":False})
+    with pytest.raises(p.Blocked): p.validate_runtime(item,cfg,{"Internal":True,"Driver":"bridge"})
 
 
 def test_changed_other_containers_detected_but_pilot_ignored():
@@ -130,3 +131,9 @@ def test_nat_only_port_mapping_rejected(monkeypatch):
         return 'container' if a[1]=='ps' else json.dumps({'8080/tcp':[{'HostIp':'0.0.0.0','HostPort':str(port)}]})
     monkeypatch.setattr(p,'run',run)
     with pytest.raises(p.Blocked): p.check_port(port)
+
+
+def test_requested_but_unpublished_port_rejected():
+    item,cfg,network=example()
+    item['NetworkSettings']['Ports']={'8080/tcp':None}
+    with pytest.raises(p.Blocked): p.validate_runtime(item,cfg,network)
