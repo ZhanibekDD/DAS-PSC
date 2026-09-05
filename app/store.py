@@ -10,11 +10,13 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.services.classifier import (
+    Classification,
     HIGH_CONFIDENCE,
     MEDIUM_CONFIDENCE,
     SERVICE,
     UNKNOWN,
     classify_path,
+    combine_classifications,
     confidence_level,
 )
 from app.services.completeness import build_completeness
@@ -60,6 +62,12 @@ CREATE TABLE IF NOT EXISTS import_documents (
  document_id INTEGER NOT NULL REFERENCES documents(id),
  PRIMARY KEY(import_id,document_id)
 );
+CREATE TABLE IF NOT EXISTS document_analysis (
+ document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+ status TEXT NOT NULL, format TEXT NOT NULL, text_chars INTEGER NOT NULL,
+ pages INTEGER, reason TEXT NOT NULL, classification_json TEXT NOT NULL,
+ digest TEXT NOT NULL, analyzed_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS events (
  id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
  kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL
@@ -104,7 +112,53 @@ class Store:
                    (project_id, kind, detail, now()))
 
     @staticmethod
-    def decorate_document(row) -> dict:
+    def _content_result(raw: str | None) -> Classification | None:
+        if not raw:
+            return None
+        try:
+            value = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            return None
+        if not value:
+            return None
+        return Classification(value["category"], float(value["confidence"]), value["reason"])
+
+    @classmethod
+    def _fresh_for_row(cls, row) -> Classification:
+        return combine_classifications(classify_path(row["path"]), cls._content_result(row["classification_json"] if "classification_json" in row.keys() else None))
+
+    @staticmethod
+    def _analysis_values(payload: dict | None) -> tuple:
+        value = payload or {}
+        classification = value.get("classification") or {}
+        return (
+            str(value.get("status") or "not_analyzed"),
+            str(value.get("format") or ""),
+            int(value.get("text_chars") or 0),
+            value.get("pages"),
+            str(value.get("reason") or ""),
+            json.dumps(classification, ensure_ascii=False, sort_keys=True),
+            str(value.get("digest") or ""),
+        )
+
+    @classmethod
+    def _upsert_analysis(cls, db, did: int, payload: dict | None):
+        status, fmt, chars, pages, reason, classification_json, digest = cls._analysis_values(payload)
+        if not digest:
+            return
+        db.execute(
+            """INSERT INTO document_analysis
+               (document_id,status,format,text_chars,pages,reason,classification_json,digest,analyzed_at)
+               VALUES(?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(document_id) DO UPDATE SET
+                 status=excluded.status,format=excluded.format,text_chars=excluded.text_chars,
+                 pages=excluded.pages,reason=excluded.reason,classification_json=excluded.classification_json,
+                 digest=excluded.digest,analyzed_at=excluded.analyzed_at""",
+            (did, status, fmt, chars, pages, reason, classification_json, digest, now()),
+        )
+
+    @staticmethod
+    def decorate_document(row, analysis=None) -> dict:
         item = dict(row)
         item["confidence_level"] = confidence_level(float(item["score"]))
         item["confidence_text"] = {
@@ -112,18 +166,37 @@ class Store:
             "medium": "Средняя",
             "low": "Низкая",
         }[item["confidence_level"]]
+        data = dict(analysis) if analysis is not None else {}
+        item["content_status"] = data.get("status", "not_analyzed")
+        item["content_format"] = data.get("format", "")
+        item["content_text_chars"] = int(data.get("text_chars") or 0)
+        item["content_pages"] = data.get("pages")
+        item["content_reason"] = data.get("reason", "")
+        item["content_needs_ocr"] = item["content_status"] == "no_text" and item["content_format"] == "pdf"
         return item
 
-    @staticmethod
-    def _reclassification_plan(rows) -> dict:
+    def _decorate_rows(self, db, rows) -> list[dict]:
+        if not rows:
+            return []
+        ids = [int(r["id"]) for r in rows]
+        marks = ",".join("?" for _ in ids)
+        analyses = {
+            int(r["document_id"]): r
+            for r in db.execute(f"SELECT * FROM document_analysis WHERE document_id IN ({marks})", ids).fetchall()
+        }
+        return [self.decorate_document(r, analyses.get(int(r["id"]))) for r in rows]
+
+    @classmethod
+    def _reclassification_plan(cls, rows) -> dict:
         state = [[r["id"], r["version"], r["category"], r["suggested_category"],
-                  float(r["score"]), r["reason"], r["path"]] for r in rows]
+                  float(r["score"]), r["reason"], r["path"], r["classification_json"]]
+                 for r in rows]
         token = hashlib.sha256(json.dumps(state, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
         changes = []
         transitions = Counter()
         new_bands = Counter()
         for row in rows:
-            fresh = classify_path(row["path"])
+            fresh = cls._fresh_for_row(row)
             changed = (
                 row["category"] != fresh.category
                 or row["suggested_category"] != fresh.category
@@ -158,6 +231,94 @@ class Store:
             "new_low": new_bands["low"],
             "samples": changes[:12],
             "_changes": changes,
+        }
+
+    @classmethod
+    def _import_refresh_plan(cls, db, pid: str, manifest: dict) -> dict:
+        docs = {
+            (r["path"], r["sha256"]): r
+            for r in db.execute(
+                "SELECT id,path,sha256,name,category,suggested_category,score,reason,reviewed,version "
+                "FROM documents WHERE project_id=?", (pid,)
+            ).fetchall()
+        }
+        analyses = {
+            int(r["document_id"]): r["digest"]
+            for r in db.execute(
+                "SELECT a.document_id,a.digest FROM document_analysis a JOIN documents d ON d.id=a.document_id "
+                "WHERE d.project_id=?", (pid,)
+            ).fetchall()
+        }
+        manifest_hash = hashlib.sha256(
+            json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        state = [manifest_hash]
+        operations = []
+        machine_changes = 0
+        analysis_updates = 0
+        protected = 0
+        unmatched = 0
+        samples = []
+
+        for item in manifest.get("files", []):
+            row = docs.get((item.get("path"), item.get("sha256")))
+            if row is None:
+                unmatched += 1
+                continue
+            did = int(row["id"])
+            content = item.get("content_analysis") or {}
+            new_digest = str(content.get("digest") or "")
+            old_digest = str(analyses.get(did) or "")
+            analysis_changed = bool(new_digest and new_digest != old_digest)
+            c = item["classification"]
+            class_changed = (
+                row["category"] != c["category"]
+                or row["suggested_category"] != c["category"]
+                or abs(float(row["score"]) - float(c["confidence"])) > 1e-9
+                or row["reason"] != c["reason"]
+            )
+            editable = not row["reviewed"] and int(row["version"]) == 1
+            if analysis_changed:
+                analysis_updates += 1
+            if class_changed and editable:
+                machine_changes += 1
+                if len(samples) < 12:
+                    samples.append({
+                        "name": row["name"],
+                        "from_category": row["category"],
+                        "to_category": c["category"],
+                        "from_score": float(row["score"]),
+                        "to_score": float(c["confidence"]),
+                        "reason": c["reason"],
+                    })
+            elif class_changed and not editable:
+                protected += 1
+            state.append([
+                did, int(row["version"]), int(row["reviewed"]), row["category"], row["suggested_category"],
+                float(row["score"]), row["reason"], old_digest, new_digest,
+            ])
+            operations.append({
+                "id": did,
+                "content": content,
+                "classification": c,
+                "analysis_changed": analysis_changed,
+                "class_changed": class_changed,
+                "editable": editable,
+            })
+
+        token = hashlib.sha256(json.dumps(state, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+        return {
+            "token": token,
+            "matched": len(operations),
+            "unmatched": unmatched,
+            "analysis_updates": analysis_updates,
+            "changed": machine_changes,
+            "protected": protected,
+            "content_text_files": int(manifest.get("content_text_files") or 0),
+            "content_needs_ocr": int(manifest.get("content_needs_ocr") or 0),
+            "content_errors": int(manifest.get("content_errors") or 0),
+            "samples": samples,
+            "_operations": operations,
         }
 
     def create_project(self, values: dict) -> dict:
@@ -205,7 +366,9 @@ class Store:
             if previous:
                 iid = previous["id"]
                 if previous["status"] == "cancelled":
-                    db.execute("UPDATE imports SET status='pending',manifest=? WHERE id=?", (payload, iid))
+                    db.execute("UPDATE imports SET status='pending',source=?,manifest=? WHERE id=?", (source[:200], payload, iid))
+                else:
+                    db.execute("UPDATE imports SET source=?,manifest=? WHERE id=?", (source[:200], payload, iid))
             else:
                 db.execute("INSERT INTO imports VALUES(?,?,?,?,?,'pending',?)",
                            (iid, pid, source[:200], digest, payload, now()))
@@ -215,10 +378,17 @@ class Store:
     def import_info(self, pid: str, iid: str) -> dict:
         with self.connect() as db:
             row = db.execute("SELECT * FROM imports WHERE id=? AND project_id=?", (iid, pid)).fetchone()
-        if row is None:
-            raise NotFound("Импорт не найден в этом объекте")
-        result = dict(row)
-        result["analysis"] = json.loads(result.pop("manifest"))
+            if row is None:
+                raise NotFound("Импорт не найден в этом объекте")
+            result = dict(row)
+            analysis = json.loads(result.pop("manifest"))
+            result["analysis"] = analysis
+            if result["status"] == "confirmed" and analysis.get("analysis_version"):
+                refresh = self._import_refresh_plan(db, pid, analysis)
+                refresh.pop("_operations")
+                result["refresh"] = refresh
+            else:
+                result["refresh"] = None
         return result
 
     def confirm_import(self, pid: str, iid: str) -> dict:
@@ -241,9 +411,52 @@ class Store:
                 did = db.execute("SELECT id FROM documents WHERE project_id=? AND path=? AND sha256=?",
                                  (pid, item["path"], item["sha256"])).fetchone()[0]
                 db.execute("INSERT OR IGNORE INTO import_documents VALUES(?,?)", (iid, did))
+                self._upsert_analysis(db, did, item.get("content_analysis"))
             db.execute("UPDATE imports SET status='confirmed' WHERE id=?", (iid,))
             self.event(db, pid, "import_confirmed", f"Реестр сохранен: добавлено {added}. Исходники не изменялись")
             return {"added": added, "already_confirmed": False}
+
+    def apply_import_refresh(self, pid: str, iid: str, expected_token: str) -> dict:
+        with self.connect(True) as db:
+            row = db.execute("SELECT status,manifest FROM imports WHERE id=? AND project_id=?", (iid, pid)).fetchone()
+            if row is None:
+                raise NotFound("Импорт не найден в этом объекте")
+            if row["status"] != "confirmed":
+                raise Conflict("Сначала подтвердите импорт")
+            manifest = json.loads(row["manifest"])
+            if not manifest.get("analysis_version"):
+                raise Conflict("В этом импорте нет содержательного анализа")
+            plan = self._import_refresh_plan(db, pid, manifest)
+            if not expected_token or expected_token != plan["token"]:
+                raise Conflict("Реестр изменился после предпросмотра. Обновите страницу и проверьте анализ заново")
+            updated_analysis = 0
+            updated_suggestions = 0
+            for op in plan["_operations"]:
+                if op["analysis_changed"]:
+                    self._upsert_analysis(db, op["id"], op["content"])
+                    updated_analysis += 1
+                if op["class_changed"] and op["editable"]:
+                    c = op["classification"]
+                    updated_suggestions += db.execute(
+                        "UPDATE documents SET suggested_category=?,category=?,score=?,reason=? "
+                        "WHERE project_id=? AND id=? AND reviewed=0 AND version=1",
+                        (c["category"], c["category"], c["confidence"], c["reason"], pid, op["id"]),
+                    ).rowcount
+            if updated_analysis != plan["analysis_updates"] or updated_suggestions != plan["changed"]:
+                raise Conflict("Не удалось атомарно применить содержательный анализ. Изменения отменены")
+            if updated_analysis or updated_suggestions:
+                self.event(
+                    db,
+                    pid,
+                    "document_content_refreshed",
+                    f"Содержательный анализ: метаданные {updated_analysis}, машинные предложения {updated_suggestions}; подтвержденные человеком записи защищены",
+                )
+            return {
+                "analysis_updated": updated_analysis,
+                "changed": updated_suggestions,
+                "protected": plan["protected"],
+                "matched": plan["matched"],
+            }
 
     def cancel_import(self, pid: str, iid: str):
         with self.connect(True) as db:
@@ -277,8 +490,8 @@ class Store:
             total = db.execute(f"SELECT COUNT(*) FROM documents WHERE {clause}", params).fetchone()[0]
             rows = db.execute(f"SELECT * FROM documents WHERE {clause} ORDER BY {order} LIMIT ? OFFSET ?",
                               [*params, page_size, (page - 1) * page_size]).fetchall()
-        return {"items": [self.decorate_document(r) for r in rows], "total": total,
-                "page": page, "page_size": page_size}
+            items = self._decorate_rows(db, rows)
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
 
     def duplicate_groups(self, pid: str, q: str = "", category: str = "", review: bool = False,
                          page: int = 1, page_size: int = 25) -> dict:
@@ -312,9 +525,10 @@ class Store:
                     f"SELECT * FROM documents WHERE project_id=? AND sha256 IN ({marks}) ORDER BY sha256,path,id",
                     [pid, *hashes],
                 ).fetchall()
+            decorated = self._decorate_rows(db, rows)
         by_hash = {digest: [] for digest in hashes}
-        for row in rows:
-            by_hash[row["sha256"]].append(self.decorate_document(row))
+        for row in decorated:
+            by_hash[row["sha256"]].append(row)
         groups = [{"sha256": digest, "count": len(by_hash[digest]), "items": by_hash[digest]}
                   for digest in hashes]
         return {"groups": groups, "total": total, "page": page, "page_size": page_size}
@@ -357,8 +571,9 @@ class Store:
         self.project(pid)
         with self.connect() as db:
             rows = db.execute(
-                "SELECT id,name,path,category,suggested_category,score,reason,version "
-                "FROM documents WHERE project_id=? AND reviewed=0 AND version=1 ORDER BY id", (pid,)
+                "SELECT d.id,d.name,d.path,d.category,d.suggested_category,d.score,d.reason,d.version,a.classification_json "
+                "FROM documents d LEFT JOIN document_analysis a ON a.document_id=d.id "
+                "WHERE d.project_id=? AND d.reviewed=0 AND d.version=1 ORDER BY d.id", (pid,)
             ).fetchall()
             protected = db.execute(
                 "SELECT COUNT(*) FROM documents WHERE project_id=? AND (reviewed=1 OR version>1)", (pid,)
@@ -372,15 +587,17 @@ class Store:
         self.project(pid)
         with self.connect(True) as db:
             rows = db.execute(
-                "SELECT id,name,path,category,suggested_category,score,reason,version "
-                "FROM documents WHERE project_id=? AND reviewed=0 AND version=1 ORDER BY id", (pid,)
+                "SELECT d.id,d.name,d.path,d.category,d.suggested_category,d.score,d.reason,d.version,a.classification_json "
+                "FROM documents d LEFT JOIN document_analysis a ON a.document_id=d.id "
+                "WHERE d.project_id=? AND d.reviewed=0 AND d.version=1 ORDER BY d.id", (pid,)
             ).fetchall()
             plan = self._reclassification_plan(rows)
             if not expected_token or expected_token != plan["token"]:
                 raise Conflict("Реестр изменился после предпросмотра. Обновите страницу и проверьте изменения заново")
             changed = 0
+            by_id = {int(r["id"]): r for r in rows}
             for item in plan["_changes"]:
-                fresh = classify_path(item["path"])
+                fresh = self._fresh_for_row(by_id[int(item["id"])])
                 changed += db.execute(
                     "UPDATE documents SET suggested_category=?,category=?,score=?,reason=? "
                     "WHERE project_id=? AND id=? AND reviewed=0 AND version=1",
@@ -402,6 +619,18 @@ class Store:
             duplicate_groups = db.execute(
                 "SELECT COUNT(*) FROM (SELECT sha256 FROM documents WHERE project_id=? GROUP BY sha256 HAVING COUNT(*)>1)", (pid,)
             ).fetchone()[0]
+            analysis_counts = Counter({
+                r["status"]: r["n"]
+                for r in db.execute(
+                    "SELECT a.status,COUNT(*) AS n FROM document_analysis a JOIN documents d ON d.id=a.document_id "
+                    "WHERE d.project_id=? GROUP BY a.status", (pid,)
+                ).fetchall()
+            })
+            ocr_needed = db.execute(
+                "SELECT COUNT(*) FROM document_analysis a JOIN documents d ON d.id=a.document_id "
+                "WHERE d.project_id=? AND a.status='no_text' AND a.format='pdf'", (pid,)
+            ).fetchone()[0]
+            analysis_total = sum(analysis_counts.values())
         meaningful = [r for r in rows if r["category"] != SERVICE and r["size"] > 0]
         report = build_completeness([r["category"] for r in meaningful], self.categories)
         for item in report["items"]:
@@ -438,6 +667,11 @@ class Store:
             "low_pending": low_pending,
             "auto_confirmable": high_pending,
             "confirmed_sections": confirmed_sections,
+            "content_text": analysis_counts["text"],
+            "content_ocr_needed": ocr_needed,
+            "content_errors": analysis_counts["error"] + analysis_counts["timeout"],
+            "content_analyzed": analysis_total,
+            "content_not_analyzed": max(0, len(rows) - analysis_total),
             "coverage": report,
         }
 
