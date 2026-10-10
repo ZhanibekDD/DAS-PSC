@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Вход · ПСК{% endblock %}
+{% block content %}
+<section class="panel login-panel">
+  <span class="kicker">Проектно-строительный контроль</span>
+  <h1>Вход в ПСК</h1>
+  <p>Войдите под своей учётной записью. Если её ещё нет, попросите администратора ПСК завести её.</p>
+  <form data-request="/api/login" data-json="true">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label>Логин<input name="username" required maxlength="60" autocomplete="username" autofocus></label>
+    <label>Пароль<input name="password" type="password" required maxlength="200" autocomplete="current-password"></label>
+    <div class="form-actions"><button type="submit">Войти</button><p class="form-message" role="status"></p></div>
+  </form>
+  <p class="login-note">После пяти неверных попыток вход с этого адреса и для этого логина приостанавливается на 15 минут.</p>
+</section>
+{% endblock %}

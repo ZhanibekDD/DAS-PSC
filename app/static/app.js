@@ -183,6 +183,10 @@ function operation(form) {
     successText: 'Открываю оставшуюся очередь проверки…',
     toast: '✓ Уверенные предложения подтверждены.'
   };
+  if (request === '/api/login') return {major: false, toast: '✓ Вход выполнен.'};
+  if (request === '/api/logout') return {major: false, toast: 'Вы вышли из ПСК.'};
+  if (request === '/api/account/password') return {major: false, toast: '✓ Пароль изменён. Войдите с новым паролем.'};
+  if (/^\/api\/users/.test(request)) return {major: false, toast: '✓ Учётные записи обновлены.'};
   return {major: false, toast: '✓ Изменение сохранено.'};
 }
 

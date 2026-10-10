@@ -17,6 +17,7 @@
       <span class="brand-mark">ПСК</span>
       <span class="brand-copy"><b>Контроль стройки</b><small>проектно-строительный контроль</small></span>
     </a>
+    {% if current_user %}
     <nav class="main-nav" aria-label="Основная навигация">
       <a class="{{ 'active' if current_path == '/' else '' }}" href="/">Объекты</a>
       {% if project is defined %}
@@ -25,7 +26,15 @@
       <a class="{{ 'active' if '/control' in current_path else '' }}" href="/projects/{{ project.id }}/control">Ход работ и предписания</a>
       {% endif %}
     </nav>
-    <div class="topbar-version">v{{ app_version }}</div>
+    {% endif %}
+    <div class="topbar-user">
+      {% if current_user and current_user.id %}
+      <a class="{{ 'active' if current_path == '/account' else '' }}" href="/account" title="Учётная запись">{{ current_user.display_name }}</a>
+      {% if current_user.role == 'admin' %}<a class="{{ 'active' if current_path == '/users' else '' }}" href="/users">Пользователи</a>{% endif %}
+      <form class="logout-form" data-request="/api/logout" data-json="true"><button type="submit" class="link-button">Выйти</button></form>
+      {% endif %}
+      <span class="topbar-version">v{{ app_version }}</span>
+    </div>
   </div>
 </header>
 <main class="main">{% block content %}{% endblock %}</main>
