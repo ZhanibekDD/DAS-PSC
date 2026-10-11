@@ -2,6 +2,7 @@
 import base64
 import binascii
 import ipaddress
+import os
 from urllib.parse import quote, urlsplit
 
 from starlette.responses import JSONResponse, RedirectResponse
@@ -15,12 +16,30 @@ LOCAL_USER = {"id": 0, "username": "local", "display_name": "Локальный 
               "active": True, "must_change": False, "last_login_at": None}
 
 
-def client_address(scope, headers) -> str:
-    """The proxy's X-Real-IP is trusted only when the connection itself comes from a private address."""
+def trusted_proxies(raw: str | None = None) -> tuple:
+    """Networks whose X-Real-IP is believed: PSC_TRUSTED_PROXIES (comma-separated IPs/CIDRs).
+
+    Default is loopback only. A private peer is not enough: through the loopback-published Docker
+    port every local client reaches the app from the bridge address and could rotate the header to
+    dodge the per-address limit, so the deployment names its proxy explicitly.
+    """
+    raw = os.environ.get("PSC_TRUSTED_PROXIES", "127.0.0.1/32,::1/128") if raw is None else raw
+    networks = []
+    for part in raw.split(","):
+        try:
+            networks.append(ipaddress.ip_network(part.strip(), strict=False))
+        except ValueError:
+            continue
+    return tuple(networks)
+
+
+def client_address(scope, headers, trusted=None) -> str:
+    """The proxy's X-Real-IP is trusted only when the connection comes from a configured proxy."""
+    trusted = trusted_proxies() if trusted is None else trusted
     peer = (scope.get("client") or ("",))[0]
     forwarded = headers.get(b"x-real-ip", b"").decode("latin-1").strip()
     try:
-        if forwarded and ipaddress.ip_address(peer).is_private:
+        if forwarded and any(ipaddress.ip_address(peer) in network for network in trusted):
             return str(ipaddress.ip_address(forwarded))
     except ValueError:
         pass

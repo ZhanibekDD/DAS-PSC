@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.auth import check_password, hash_password
 from app.main import create_app
-from app.security import client_address
+from app.security import client_address, trusted_proxies
 
 H = {'X-PSC-Request': '1'}
 HTML = {'Accept': 'text/html'}
@@ -146,6 +146,49 @@ def test_password_hashes_and_proxy_address():
     assert encoded.startswith('pbkdf2_sha256$1000$') and PW not in encoded
     assert check_password(PW, encoded) and not check_password('other', encoded) and not check_password(PW, 'garbage')
     headers = {b'x-real-ip': b'203.0.113.9'}
-    assert client_address({'client': ('172.18.0.1', 1)}, headers) == '203.0.113.9'
-    assert client_address({'client': ('93.184.216.34', 1)}, {b'x-real-ip': b'10.0.0.1'}) == '93.184.216.34'
-    assert client_address({'client': ('172.18.0.1', 1)}, {b'x-real-ip': b'not-an-ip'}) == '172.18.0.1'
+    proxy = trusted_proxies('172.18.0.1/32')
+    assert client_address({'client': ('172.18.0.1', 1)}, headers, proxy) == '203.0.113.9'
+    assert client_address({'client': ('93.184.216.34', 1)}, {b'x-real-ip': b'10.0.0.1'}, proxy) == '93.184.216.34'
+    assert client_address({'client': ('172.18.0.1', 1)}, {b'x-real-ip': b'not-an-ip'}, proxy) == '172.18.0.1'
+    # Not a configured proxy: another private peer cannot choose its address.
+    assert client_address({'client': ('172.18.0.5', 1)}, headers, proxy) == '172.18.0.5'
+    assert client_address({'client': ('172.18.0.1', 1)}, headers, trusted_proxies('')) == '172.18.0.1'
+    loopback = trusted_proxies('127.0.0.1/32,::1/128')
+    assert client_address({'client': ('127.0.0.1', 1)}, headers, loopback) == '203.0.113.9'
+
+
+def test_parallel_attempts_cannot_exceed_the_limit():
+    import threading
+    from app.auth import Throttle
+    throttle = Throttle(limit=5, window=900)
+    barrier = threading.Barrier(20)
+    results = []
+
+    def go():
+        barrier.wait()
+        results.append(throttle.attempt('addr:203.0.113.9', 'user:psc'))
+
+    threads = [threading.Thread(target=go) for _ in range(20)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sum(r is not None for r in results) == 5
+
+
+def test_own_login_does_not_reset_failures_of_the_address():
+    from app.auth import Throttle
+    clock = [1000.0]
+    throttle = Throttle(limit=5, window=900, clock=lambda: clock[0])
+    for name in ('a', 'b', 'c', 'd'):  # four wrong passwords for other logins
+        clock[0] += 1
+        assert throttle.attempt('addr:x', 'user:' + name) is not None
+    clock[0] += 1
+    stamp = throttle.attempt('addr:x', 'user:me')  # own valid account
+    throttle.succeeded(stamp, 'addr:x', 'user:me')
+    clock[0] += 1
+    assert throttle.attempt('addr:x', 'user:e') is not None  # fifth failure from the address
+    clock[0] += 1
+    assert throttle.attempt('addr:x', 'user:f') is None  # blocked: the success did not wipe the count
+    assert throttle.attempt('addr:y', 'user:me') is not None  # the login's own count was reset
+

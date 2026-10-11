@@ -101,6 +101,28 @@ class Throttle:
         with self.lock:
             return any(len(self._recent(key)) >= self.limit for key in keys)
 
+    def attempt(self, *keys: str) -> float | None:
+        """Refuse a blocked attempt or count it, under one lock: a burst of parallel requests
+        cannot all pass the check before any of them is recorded. None = blocked."""
+        with self.lock:
+            if any(len(self._recent(key)) >= self.limit for key in keys):
+                return None
+            stamp = self.clock()
+            for key in keys:
+                self.failures.setdefault(key, []).append(stamp)
+            return stamp
+
+    def succeeded(self, stamp: float, address_key: str, login_key: str) -> None:
+        """A valid login: this attempt no longer counts for the address (earlier failures from it
+        still do: logging into one's own account is no reset) and the login's own count is reset."""
+        with self.lock:
+            entries = self.failures.get(address_key, [])
+            if stamp in entries:
+                entries.remove(stamp)
+            if not entries:
+                self.failures.pop(address_key, None)
+            self.failures.pop(login_key, None)
+
     def fail(self, *keys: str) -> None:
         with self.lock:
             for key in keys:
@@ -152,7 +174,8 @@ class Auth:
     def authenticate(self, username: str, password: str, address: str) -> dict:
         username = username.strip()
         keys = ("addr:" + address, "user:" + username.casefold())
-        if self.throttle.blocked(*keys):
+        stamp = self.throttle.attempt(*keys)
+        if stamp is None:
             with self.store.connect(write=True) as db:
                 self._event(db, username, "login_blocked", address, "")
             raise LoginRejected("Слишком много неудачных попыток. Подождите 15 минут.")
@@ -160,12 +183,11 @@ class Auth:
             row = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
         # An unknown login costs the same hash time, so timing does not tell which logins exist.
         valid = check_password(password, row["password_hash"] if row else DUMMY_HASH) and bool(row and row["active"])
-        if not valid:
-            self.throttle.fail(*keys)
+        if not valid:  # already counted by attempt()
             with self.store.connect(write=True) as db:  # outside the failed path, so the record is kept
                 self._event(db, username, "login_failed", address, "")
             raise LoginRejected("Неверный логин или пароль")
-        self.throttle.clear(*keys)
+        self.throttle.succeeded(stamp, *keys)
         with self.store.connect(write=True) as db:
             db.execute("UPDATE users SET last_login_at=? WHERE id=?", (now().isoformat(), row["id"]))
             self._event(db, row["username"], "login", address, "")
