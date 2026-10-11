@@ -91,6 +91,24 @@ def test_cookie_is_secure_behind_the_https_proxy(tmp_path):
         assert 'secure' not in login(c, headers={'X-Forwarded-Proto': 'https'}).headers['set-cookie'].lower()
 
 
+def test_password_change_between_check_and_session_wins(tmp_path):
+    with client(tmp_path) as c:
+        auth = c.app.state.auth
+        verify = auth._verify
+
+        def racing(username, password, address):
+            row = verify(username, password, address)
+            auth.reset_password(row['id'], 'Replaced-pass-99', 'admin')  # commits before the session insert
+            return row
+        auth._verify = racing
+        r = login(c)
+        assert r.status_code == 401 and 'Войдите заново' in r.json()['detail']
+        auth._verify = verify
+        with auth.store.connect() as db:
+            assert db.execute('select count(*) from sessions').fetchone()[0] == 0
+        assert c.get('/api/projects').status_code == 401
+
+
 def test_current_password_guesses_are_limited(tmp_path):
     with client(tmp_path) as c:
         assert login(c).status_code == 200

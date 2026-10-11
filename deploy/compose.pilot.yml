@@ -21,7 +21,7 @@ services:
       PSC_PASSWORD: "${PSC_PASSWORD:?A private pilot password is required}"
       PSC_DATA_DIR: /data
       PSC_ALLOWED_HOSTS: localhost,127.0.0.1
-      # Host nginx reaches the app via the loopback port, i.e. from this network's gateway.
+      # Only the host nginx uses the published port (DEPLOYMENT.md «Вход»); it comes from this network's gateway.
       PSC_TRUSTED_PROXIES: gateway
       PSC_TIMEZONE: "${PSC_TIMEZONE:-UTC}"
       NVIDIA_VISIBLE_DEVICES: void

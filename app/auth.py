@@ -211,6 +211,9 @@ class Auth:
                 "last_login_at": row["last_login_at"]}
 
     def authenticate(self, username: str, password: str, address: str) -> dict:
+        return self._public(self._verify(username, password, address))
+
+    def _verify(self, username: str, password: str, address: str):
         username = username.strip()
         keys = ("addr:" + address, "user:" + username.casefold())
         stamp = self.throttle.attempt(*keys)
@@ -231,13 +234,19 @@ class Auth:
         with self.store.connect(write=True) as db:
             db.execute("UPDATE users SET last_login_at=? WHERE id=?", (now().isoformat(), row["id"]))
             self._event(db, row["username"], "login", address, "")
-        return self._public(row)
+        return row
 
     def login(self, username: str, password: str, address: str) -> tuple[str, dict]:
-        user = self.authenticate(username, password, address)
+        row = self._verify(username, password, address)
+        user = self._public(row)
         token = secrets.token_urlsafe(32)
         created = now()
         with self.store.connect(write=True) as db:
+            # A password change, reset or deactivation that committed after the check wins: it has
+            # already deleted the sessions, so a session made from the old password must not appear.
+            if not db.execute("SELECT 1 FROM users WHERE id=? AND active=1 AND password_hash=?",
+                              (row["id"], row["password_hash"])).fetchone():
+                raise LoginRejected("Пароль или доступ только что изменились. Войдите заново.")
             db.execute("DELETE FROM sessions WHERE expires_at < ?", (created.isoformat(),))
             db.execute("INSERT INTO sessions(token_hash,user_id,created_at,expires_at) VALUES(?,?,?,?)",
                        (token_hash(token), user["id"], created.isoformat(),
