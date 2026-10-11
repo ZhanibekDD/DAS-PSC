@@ -227,6 +227,7 @@ def verify(cfg):
     if changed:
         raise Blocked("Non-pilot container state changed: "+", ".join(changed)+". Investigate; do not restart them")
     return {"status":"PILOT_PASS", "url_on_server":url, "source_commit":cfg["commit"],
+            "auth":"401 without credentials, login page answers; no password tried",
             "cpu_limit":1, "ram_limit_gib":1, "gpu":"not attached", "other_containers":"unchanged in this snapshot"}
 
 
