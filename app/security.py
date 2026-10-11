@@ -1,6 +1,7 @@
 """Login sessions (or local-only without a password), same-origin writes and body limits."""
 import base64
 import binascii
+import functools
 import ipaddress
 import os
 from urllib.parse import quote, urlsplit
@@ -16,18 +17,37 @@ LOCAL_USER = {"id": 0, "username": "local", "display_name": "Локальный 
               "active": True, "must_change": False, "last_login_at": None}
 
 
-def trusted_proxies(raw: str | None = None) -> tuple:
+@functools.lru_cache(maxsize=4)
+def default_gateway(route_file: str = "/proc/net/route") -> str | None:
+    """The container's IPv4 default gateway: the host side of its Docker bridge."""
+    try:
+        with open(route_file) as fh:
+            for line in fh.read().splitlines()[1:]:
+                fields = line.split()
+                if len(fields) > 7 and fields[1] == "00000000" and fields[7] == "00000000":
+                    return str(ipaddress.IPv4Address(bytes.fromhex(fields[2])[::-1]))
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def trusted_proxies(raw: str | None = None, route_file: str = "/proc/net/route") -> tuple:
     """Networks whose X-Real-IP is believed: PSC_TRUSTED_PROXIES (comma-separated IPs/CIDRs).
 
     Default is loopback only. A private peer is not enough: through the loopback-published Docker
     port every local client reaches the app from the bridge address and could rotate the header to
-    dodge the per-address limit, so the deployment names its proxy explicitly.
+    dodge the per-address limit, so the deployment names its proxy explicitly. `gateway` means the
+    container's default gateway: in the pilot the host nginx reaches the app through the published
+    loopback port, i.e. from the bridge gateway, whose address Docker assigns per network.
     """
     raw = os.environ.get("PSC_TRUSTED_PROXIES", "127.0.0.1/32,::1/128") if raw is None else raw
     networks = []
     for part in raw.split(","):
+        part = part.strip()
+        if part == "gateway":
+            part = default_gateway(route_file) or ""
         try:
-            networks.append(ipaddress.ip_network(part.strip(), strict=False))
+            networks.append(ipaddress.ip_network(part, strict=False))
         except ValueError:
             continue
     return tuple(networks)

@@ -157,6 +157,22 @@ def test_password_hashes_and_proxy_address():
     assert client_address({'client': ('127.0.0.1', 1)}, headers, loopback) == '203.0.113.9'
 
 
+def test_gateway_keyword_trusts_only_the_bridge_gateway(tmp_path):
+    route = tmp_path / 'route'
+    route.write_text(
+        'Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n'
+        'eth0\t00000000\t010019AC\t0003\t0\t0\t0\t00000000\t0\t0\t0\n'
+        'eth0\t000019AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0\n')
+    headers = {b'x-real-ip': b'203.0.113.9'}
+    proxy = trusted_proxies('gateway', route_file=str(route))
+    assert [str(n) for n in proxy] == ['172.25.0.1/32']
+    assert client_address({'client': ('172.25.0.1', 1)}, headers, proxy) == '203.0.113.9'
+    assert client_address({'client': ('172.25.0.7', 1)}, headers, proxy) == '172.25.0.7'
+    assert client_address({'client': ('127.0.0.1', 1)}, headers, proxy) == '127.0.0.1'
+    # No routing table (not Linux, or unreadable): nothing is trusted rather than everything.
+    assert trusted_proxies('gateway', route_file=str(tmp_path / 'missing')) == ()
+
+
 def test_parallel_attempts_cannot_exceed_the_limit():
     import threading
     from app.auth import Throttle
