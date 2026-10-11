@@ -86,6 +86,7 @@ class Throttle:
     def __init__(self, limit: int = MAX_FAILURES, window: int = LOCK_SECONDS, clock=time.monotonic):
         self.limit, self.window, self.clock = limit, window, clock
         self.failures: dict[str, list[float]] = {}
+        self.block_logged: dict[str, float] = {}
         self.lock = threading.Lock()
 
     def _recent(self, key: str) -> list[float]:
@@ -111,6 +112,18 @@ class Throttle:
             for key in keys:
                 self.failures.setdefault(key, []).append(stamp)
             return stamp
+
+    def first_block(self, address_key: str) -> bool:
+        """True once per window for a blocked address: the journal records the lockout, not every
+        refused request (a refusal skips the password hash, so it costs a client nothing to repeat)."""
+        with self.lock:
+            stamp = self.clock()
+            for key in [k for k, t in self.block_logged.items() if t <= stamp - self.window]:
+                del self.block_logged[key]
+            if address_key in self.block_logged:
+                return False
+            self.block_logged[address_key] = stamp
+            return True
 
     def succeeded(self, stamp: float, address_key: str, login_key: str) -> None:
         """A valid login: this attempt no longer counts for the address (earlier failures from it
@@ -176,8 +189,9 @@ class Auth:
         keys = ("addr:" + address, "user:" + username.casefold())
         stamp = self.throttle.attempt(*keys)
         if stamp is None:
-            with self.store.connect(write=True) as db:
-                self._event(db, username, "login_blocked", address, "")
+            if self.throttle.first_block(keys[0]):
+                with self.store.connect(write=True) as db:
+                    self._event(db, username, "login_blocked", address, "")
             raise LoginRejected("Слишком много неудачных попыток. Подождите 15 минут.")
         with self.store.connect() as db:
             row = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()

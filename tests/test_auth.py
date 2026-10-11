@@ -54,6 +54,22 @@ def test_five_wrong_passwords_pause_the_login(tmp_path):
         r = login(c)
         assert r.status_code == 401 and 'Подождите 15 минут' in r.json()['detail']
         assert c.get('/api/projects', auth=('psc', PW)).status_code == 401
+        for _ in range(50):  # refused requests skip the hash: they must not each write to the journal
+            login(c, password='wrong-password-1')
+            c.get('/api/projects', auth=('psc', 'wrong-password-1'))
+        events = [e['event'] for e in c.app.state.auth.events(1000)]
+        assert events.count('login_failed') == 5 and events.count('login_blocked') == 1
+
+
+def test_block_is_journaled_once_per_address_and_window():
+    from app.auth import Throttle
+    clock = [1000.0]
+    throttle = Throttle(limit=5, window=900, clock=lambda: clock[0])
+    assert throttle.first_block('addr:x') and not throttle.first_block('addr:x')
+    assert throttle.first_block('addr:y')
+    clock[0] += 901
+    assert throttle.first_block('addr:x')
+    assert set(throttle.block_logged) == {'addr:x'}  # expired entries are dropped, memory stays bounded
 
 
 def test_cookie_is_secure_behind_the_https_proxy(tmp_path):
@@ -139,6 +155,16 @@ def test_login_journal_is_visible_to_the_admin(tmp_path):
         login(c)
         page = c.get('/users', headers=HTML).text
         assert 'неверный пароль' in page and 'вход' in page and 'первый администратор' in page
+
+
+def test_control_page_keeps_the_menu_and_account_links(tmp_path):
+    with client(tmp_path) as c:
+        login(c)
+        pid = c.post('/api/projects', json={'name': 'КС Ноябрьск', 'code': 'KS-1'}, headers=H).json()['id']
+        page = c.get(f'/projects/{pid}/control', headers=HTML)
+        assert page.status_code == 200
+        for text in ('Объекты', 'Администратор ПСК', 'Пользователи', 'Выйти', 'v0.'):
+            assert text in page.text, text
 
 
 def test_password_hashes_and_proxy_address():

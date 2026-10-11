@@ -160,6 +160,8 @@ def create_app(data_dir: Path | None = None, password: str | None = None) -> Fas
             },
         )
 
+    app.state.render = render  # routers outside this module get the same base context
+
     @app.get("/health")
     def health(request: Request):
         with store(request).connect() as db:
