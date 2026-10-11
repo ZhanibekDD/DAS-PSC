@@ -72,6 +72,18 @@ def test_block_is_journaled_once_per_address_and_window():
     assert set(throttle.block_logged) == {'addr:x'}  # expired entries are dropped, memory stays bounded
 
 
+def test_keys_of_logins_never_tried_again_expire():
+    from app.auth import Throttle
+    clock = [1000.0]
+    throttle = Throttle(limit=5, window=900, clock=lambda: clock[0])
+    for n in range(40):  # one-off usernames from rotating addresses
+        assert throttle.attempt(f'addr:10.0.0.{n}', f'user:guess{n}') is not None
+    assert len(throttle.failures) == 80
+    clock[0] += 901
+    throttle.attempt('addr:203.0.113.9', 'user:psc')
+    assert set(throttle.failures) == {'addr:203.0.113.9', 'user:psc'}
+
+
 def test_cookie_is_secure_behind_the_https_proxy(tmp_path):
     with client(tmp_path) as c:
         assert 'secure' in login(c, headers={'X-Forwarded-Proto': 'https'}).headers['set-cookie'].lower()
@@ -147,6 +159,15 @@ def test_local_mode_without_password_is_unchanged(tmp_path):
     with client(tmp_path, password='', client=('203.0.113.7', 50000)) as c:
         assert c.get('/').status_code == 403
         assert c.get('/health').status_code == 200
+
+
+def test_enabling_the_password_after_local_accounts_still_gives_an_admin(tmp_path):
+    with client(tmp_path, password='') as c:  # local mode: accounts default to the "user" role
+        assert c.post('/api/users', json={'username': 'ivan', 'password': 'Ivan-pass-123'}, headers=H).status_code == 201
+    with client(tmp_path) as c:
+        assert login(c).status_code == 200
+        assert c.get('/users', headers=HTML).status_code == 200
+        assert login(c, user='ivan', password='Ivan-pass-123').status_code == 200
 
 
 def test_login_journal_is_visible_to_the_admin(tmp_path):

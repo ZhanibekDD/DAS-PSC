@@ -23,6 +23,7 @@ PBKDF2_ITERATIONS = 390_000
 MIN_PASSWORD = 10
 MAX_FAILURES = 5
 LOCK_SECONDS = 15 * 60
+SWEEP_SECONDS = 60
 
 SCHEMA = [
     """CREATE TABLE IF NOT EXISTS users (
@@ -87,7 +88,21 @@ class Throttle:
         self.limit, self.window, self.clock = limit, window, clock
         self.failures: dict[str, list[float]] = {}
         self.block_logged: dict[str, float] = {}
+        self.swept = clock()
         self.lock = threading.Lock()
+
+    def _sweep(self) -> None:
+        """Drop keys whose newest failure left the window (call under the lock, at most once a minute):
+        logins and addresses that are never tried again would otherwise stay for the worker's life."""
+        stamp = self.clock()
+        if stamp - self.swept < SWEEP_SECONDS:
+            return
+        self.swept = stamp
+        cutoff = stamp - self.window
+        for key in [k for k, times in self.failures.items() if not times or times[-1] <= cutoff]:
+            del self.failures[key]
+        for key in [k for k, t in self.block_logged.items() if t <= cutoff]:
+            del self.block_logged[key]
 
     def _recent(self, key: str) -> list[float]:
         cutoff = self.clock() - self.window
@@ -106,6 +121,7 @@ class Throttle:
         """Refuse a blocked attempt or count it, under one lock: a burst of parallel requests
         cannot all pass the check before any of them is recorded. None = blocked."""
         with self.lock:
+            self._sweep()
             if any(len(self._recent(key)) >= self.limit for key in keys):
                 return None
             stamp = self.clock()
@@ -158,9 +174,17 @@ class Auth:
                 db.execute(statement)
             if not bootstrap_password:
                 return
-            if not db.execute("SELECT 1 FROM users LIMIT 1").fetchone():
-                db.execute("""INSERT INTO users(username,display_name,password_hash,role,password_source,created_at)
-                    VALUES('psc','Администратор ПСК',?,'admin','env',?)""", (hash_password(bootstrap_password), now().isoformat()))
+            if not db.execute("SELECT 1 FROM users WHERE role='admin' AND active=1 LIMIT 1").fetchone():
+                # No one could open «Пользователи» (e.g. accounts made in local mode default to
+                # "user"): "psc" with the server password becomes that administrator.
+                row = db.execute("SELECT id FROM users WHERE username='psc'").fetchone()
+                if row:
+                    db.execute("UPDATE users SET role='admin', active=1, password_hash=?, password_source='env' WHERE id=?",
+                               (hash_password(bootstrap_password), row["id"]))
+                    db.execute("DELETE FROM sessions WHERE user_id=?", (row["id"],))
+                else:
+                    db.execute("""INSERT INTO users(username,display_name,password_hash,role,password_source,created_at)
+                        VALUES('psc','Администратор ПСК',?,'admin','env',?)""", (hash_password(bootstrap_password), now().isoformat()))
                 self._event(db, "psc", "bootstrap_admin", "", "")
                 return
             # Until the admin sets a password in the interface, PSC_PASSWORD stays the password of "psc".
