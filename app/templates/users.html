@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Пользователи · ПСК{% endblock %}
+{% block content %}
+{% set event_labels = {'login': 'вход', 'login_failed': 'неверный пароль', 'login_blocked': 'вход приостановлен', 'logout': 'выход',
+  'password_changed': 'сменил пароль', 'password_reset': 'пароль сброшен', 'user_created': 'учётная запись создана',
+  'user_disabled': 'отключён', 'user_enabled': 'включён', 'bootstrap_admin': 'первый администратор'} %}
+<header class="page-heading">
+  <div><span class="kicker">Администрирование</span><h1>Пользователи</h1>
+  <p>У каждого сотрудника своя учётная запись: в журнале видно, кто входил и что менял.</p></div>
+  <a class="button" href="#add-user">+ Добавить</a>
+</header>
+<section class="panel">
+  <div class="section-head"><div><span class="kicker">Учётные записи</span><h2>Кто может входить в ПСК</h2></div></div>
+  <div class="table-scroll"><table class="users-table">
+    <thead><tr><th>Сотрудник</th><th>Логин</th><th>Роль</th><th>Последний вход</th><th>Состояние</th><th></th></tr></thead>
+    <tbody>
+    {% for u in users %}
+      <tr class="{{ '' if u.active else 'is-disabled' }}">
+        <td><b>{{ u.display_name }}</b></td>
+        <td>{{ u.username }}</td>
+        <td>{{ 'администратор' if u.role == 'admin' else 'сотрудник' }}</td>
+        <td>{{ ((u.last_login_at or '')[:16]|replace('T', ' ')) or '—' }}</td>
+        <td>{% if not u.active %}отключён{% elif u.must_change %}ждёт смены временного пароля{% else %}активен{% endif %}</td>
+        <td>
+          <details class="inline-advanced"><summary>Действия</summary>
+            <form data-request="/api/users/{{ u.id }}/password" data-json="true">
+              <label>Новый временный пароль<input name="password" type="password" required minlength="10" maxlength="200" autocomplete="new-password"></label>
+              <div class="form-actions"><button type="submit">Сбросить пароль</button><p class="form-message" role="status"></p></div>
+            </form>
+            {% if u.id != user.id %}
+            <form data-request="/api/users/{{ u.id }}/active" data-json="true">
+              <input type="hidden" name="active" value="{{ 'false' if u.active else 'true' }}">
+              <div class="form-actions"><button type="submit" class="secondary">{{ 'Отключить' if u.active else 'Включить' }}</button><p class="form-message" role="status"></p></div>
+            </form>
+            {% endif %}
+          </details>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+<section class="panel create-panel" id="add-user">
+  <div class="section-head"><div><span class="kicker">Новая учётная запись</span><h2>Добавить сотрудника</h2>
+  <p>Задайте временный пароль и передайте его сотруднику лично. При первом входе ПСК попросит сменить его.</p></div></div>
+  <form data-request="/api/users" data-json="true">
+    <div class="form-grid">
+      <label>Имя и фамилия<input name="display_name" required maxlength="120" placeholder="Например: Иван Петров"></label>
+      <label>Логин<input name="username" required maxlength="60" pattern="[A-Za-z0-9._@\-]+" title="Латинские буквы, цифры и . _ - @" autocomplete="off" placeholder="Например: ipetrov"></label>
+      <label>Роль<select name="role"><option value="user">Сотрудник</option><option value="admin">Администратор</option></select></label>
+      <label>Временный пароль<input name="password" type="password" required minlength="10" maxlength="200" autocomplete="new-password"></label>
+    </div>
+    <div class="form-actions"><button type="submit">Создать учётную запись</button><p class="form-message" role="status"></p></div>
+  </form>
+</section>
+<section class="panel">
+  <div class="section-head"><div><span class="kicker">Журнал</span><h2>Последние входы и изменения</h2></div></div>
+  {% if events %}
+  <div class="table-scroll"><table class="users-table">
+    <thead><tr><th>Когда</th><th>Логин</th><th>Событие</th><th>Кто</th><th>Адрес</th></tr></thead>
+    <tbody>{% for e in events %}<tr><td>{{ e.created_at[:16]|replace('T', ' ') }}</td><td>{{ e.username }}</td><td>{{ event_labels.get(e.event, e.event) }}</td><td>{{ e.actor or '—' }}</td><td>{{ e.address or '—' }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% else %}<p>Событий пока нет.</p>{% endif %}
+</section>
+{% endblock %}

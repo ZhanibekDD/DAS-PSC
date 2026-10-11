@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Объекты · ПСК{% endblock %}
+{% block content %}
+{% set ns = namespace(review=0, open=0, overdue=0) %}
+{% for p in projects %}
+  {% set ns.review = ns.review + p.review %}
+  {% set ns.open = ns.open + p.control.open_issues %}
+  {% set ns.overdue = ns.overdue + p.control.overdue_issues %}
+{% endfor %}
+
+<header class="page-heading">
+  <div><span class="kicker">Рабочая панель</span><h1>Объекты</h1><p>Откройте объект и сразу увидите, что требует внимания.</p></div>
+  <a class="button" href="#create">+ Новый объект</a>
+</header>
+
+{% if projects %}
+<section class="attention-board {{ 'all-clear' if ns.review == 0 and ns.open == 0 and ns.overdue == 0 else '' }}">
+  <div class="attention-copy">
+    <span class="kicker">Сегодня</span>
+    {% if ns.review or ns.open or ns.overdue %}
+      <h2>Есть задачи, которые стоит проверить</h2>
+      <p>ПСК собрал их в одном месте — не нужно обходить каждый раздел вручную.</p>
+    {% else %}
+      <h2>Критичных задач сейчас не видно</h2>
+      <p>Продолжайте вести документы, работы и замечания по мере поступления.</p>
+    {% endif %}
+  </div>
+  <div class="attention-numbers">
+    <span><b>{{ ns.review }}</b><small>документов проверить</small></span>
+    <span><b>{{ ns.open }}</b><small>открытых замечаний</small></span>
+    <span class="{{ 'danger-number' if ns.overdue else '' }}"><b>{{ ns.overdue }}</b><small>просрочено</small></span>
+  </div>
+</section>
+{% endif %}
+
+<section class="section-head dashboard-section-head"><div><h2>Ваши объекты</h2><p>{{ projects|length }} объектов · {{ projects|sum(attribute='documents') }} документов</p></div></section>
+
+{% if projects %}
+<section class="project-grid">
+{% for p in projects %}
+<article class="project-tile">
+  <a class="project-tile-link" href="/projects/{{ p.id }}" aria-label="Открыть {{ p.name }}"></a>
+  <div class="project-tile-top">
+    <div><span class="project-code">{{ p.code }}</span><h3>{{ p.name }}</h3><p>{{ p.responsible or 'Ответственный не указан' }}</p></div>
+    <span class="tile-arrow">→</span>
+  </div>
+  <div class="project-health">
+    {% if p.control.overdue_issues %}<span class="health-chip danger">{{ p.control.overdue_issues }} просрочено</span>
+    {% elif p.review %}<span class="health-chip warning">{{ p.review }} документов проверить</span>
+    {% elif p.control.open_issues %}<span class="health-chip warning">{{ p.control.open_issues }} замечаний открыто</span>
+    {% else %}<span class="health-chip ok">Нет срочных действий</span>{% endif %}
+  </div>
+  <div class="project-tile-metrics">
+    <span><b>{{ p.documents }}</b><small>документов</small></span>
+    <span><b>{{ p.review }}</b><small>на проверке</small></span>
+    <span><b>{{ p.control.open_issues }}</b><small>замечаний</small></span>
+    <span><b>{{ p.control.overdue_issues }}</b><small>просрочено</small></span>
+  </div>
+</article>
+{% endfor %}
+</section>
+{% else %}
+<section class="empty-state"><div class="empty-icon">＋</div><h2>Начните с одного объекта</h2><p>Создайте карточку объекта, затем загрузите ZIP с документами. ПСК соберёт рабочую картину.</p><a class="button" href="#create">Создать первый объект</a></section>
+{% endif %}
+
+<section class="panel create-panel" id="create">
+  <div class="section-head"><div><span class="kicker">Новый объект</span><h2>Создать объект</h2><p>Для старта достаточно названия и кода.</p></div></div>
+  <form data-request="/api/projects" data-json="true">
+    <div class="form-grid">
+      <label>Название объекта<input name="name" required maxlength="200" placeholder="Например: ДНС-11"></label>
+      <label>Код объекта<input name="code" required maxlength="100" placeholder="Например: PSC-001"></label>
+      <label>Заказчик <span class="optional">необязательно</span><input name="customer" maxlength="200"></label>
+      <label>Ответственный <span class="optional">необязательно</span><input name="responsible" maxlength="200"></label>
+    </div>
+    <div class="form-actions"><button type="submit">Создать объект</button><p class="form-message" role="status"></p></div>
+  </form>
+</section>
+{% endblock %}

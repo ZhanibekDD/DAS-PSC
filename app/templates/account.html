@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Учётная запись · ПСК{% endblock %}
+{% block content %}
+<header class="page-heading">
+  <div><span class="kicker">Учётная запись</span><h1>{{ user.display_name }}</h1>
+  <p>Логин: <b>{{ user.username }}</b> · {{ 'администратор' if user.role == 'admin' else 'сотрудник' }}</p></div>
+</header>
+{% if user.must_change %}
+<section class="panel attention-note">
+  <h2>Задайте свой пароль</h2>
+  <p>Вам выдан временный пароль. Придумайте новый, чтобы продолжить работу в ПСК.</p>
+</section>
+{% endif %}
+{% if user.id %}
+<section class="panel">
+  <div class="section-head"><div><span class="kicker">Безопасность</span><h2>Сменить пароль</h2>
+  <p>Не меньше 10 символов: буквы и цифры, без повторов одного символа. После смены войдите заново.</p></div></div>
+  <form data-request="/api/account/password" data-json="true">
+    <div class="form-grid">
+      <label>Текущий пароль<input name="current" type="password" required maxlength="200" autocomplete="current-password"></label>
+      <label>Новый пароль<input name="new" type="password" required minlength="10" maxlength="200" autocomplete="new-password"></label>
+      <label>Повтор нового пароля<input name="repeat" type="password" required minlength="10" maxlength="200" autocomplete="new-password"></label>
+    </div>
+    <div class="form-actions"><button type="submit">Сменить пароль</button><p class="form-message" role="status"></p></div>
+  </form>
+</section>
+{% else %}
+<section class="panel"><p>ПСК запущен в локальном режиме без паролей: вход и смена пароля здесь не используются.</p></section>
+{% endif %}
+{% endblock %}

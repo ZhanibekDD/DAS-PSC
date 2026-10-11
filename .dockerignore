@@ -1,0 +1,6 @@
+**
+!pyproject.toml
+!app/
+!app/**
+app/**/__pycache__/
+app/**/*.pyc
