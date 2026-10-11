@@ -131,17 +131,18 @@ class Throttle:
                 self.failures.setdefault(key, []).append(stamp)
             return stamp
 
-    def first_block(self, address_key: str) -> bool:
-        """True once per window for a blocked address: the journal records the lockout, not every
-        refused request (a refusal skips the password hash, so it costs a client nothing to repeat)."""
+    def first_block(self, *keys: str) -> bool:
+        """True once per window for each key that causes the block (a blocked login tried from
+        rotating addresses, or a blocked address trying rotating logins): the journal records the
+        lockout, not every refused request, which skips the password hash and costs nothing to repeat.
+        Expired entries are dropped by _sweep()."""
         with self.lock:
             stamp = self.clock()
-            for key in [k for k, t in self.block_logged.items() if t <= stamp - self.window]:
-                del self.block_logged[key]
-            if address_key in self.block_logged:
-                return False
-            self.block_logged[address_key] = stamp
-            return True
+            blocking = [k for k in keys if len(self._recent(k)) >= self.limit] or list(keys)
+            fresh = [k for k in blocking if self.block_logged.get(k, float("-inf")) <= stamp - self.window]
+            for key in fresh:
+                self.block_logged[key] = stamp
+            return bool(fresh)
 
     def succeeded(self, stamp: float, address_key: str, login_key: str) -> None:
         """A valid login: this attempt no longer counts for the address (earlier failures from it
@@ -218,7 +219,7 @@ class Auth:
         keys = ("addr:" + address, "user:" + username.casefold())
         stamp = self.throttle.attempt(*keys)
         if stamp is None:
-            if self.throttle.first_block(keys[0]):
+            if self.throttle.first_block(*keys):
                 with self.store.connect(write=True) as db:
                     self._event(db, username, "login_blocked", address, "")
             raise LoginRejected("Слишком много неудачных попыток. Подождите 15 минут.")

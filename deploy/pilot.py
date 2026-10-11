@@ -7,7 +7,6 @@ Credentials and a redacted container baseline stay in .state/ (owner-only).
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import json
 import os
@@ -193,22 +192,14 @@ def validate_runtime(item, cfg, network):
         raise Blocked("Runtime isolation/limits differ from the approved configuration")
 
 
-def ui_smoke(url, password):
-    """The server password opens the UI as psc until the administrator changes that password in
-    the interface (then it is personal and unknown here): a 401 is accepted when the login page answers."""
-    token = base64.b64encode(("psc:"+password).encode()).decode()
-    try:
-        with HTTP.open(urllib.request.Request(url+"/", headers={"Authorization":"Basic "+token}), timeout=5) as response:
-            if response.status != 200:
-                raise Blocked("Authenticated UI smoke failed")
-            return "server password"
-    except urllib.error.HTTPError as exc:
-        if exc.code != 401:
-            raise Blocked("Authenticated UI smoke failed") from exc
+def ui_smoke(url):
+    """A probe that changes nothing: the login page answers. No password is tried here: once the
+    administrator changes the psc password in the interface the server password is stale, and each
+    attempt with it would count as a failed login (five lock psc out for 15 minutes)."""
     with HTTP.open(urllib.request.Request(url+"/login", headers={"Accept":"text/html"}), timeout=5) as page:
         if page.status != 200 or "Вход в ПСК" not in page.read().decode("utf-8", "replace"):
             raise Blocked("Login page smoke failed")
-    return "login page (psc password changed in the interface)"
+    return "login page"
 
 
 def verify(cfg):
@@ -230,7 +221,7 @@ def verify(cfg):
             raise Blocked("Unexpected unauthenticated response") from exc
     else:
         raise Blocked("Authentication is not enforced")
-    ui_smoke(url, cfg["password"])
+    ui_smoke(url)
     baseline = json.loads((HERE/".state/baseline.json").read_text())["containers"]
     changed = changes(baseline, containers())
     if changed:

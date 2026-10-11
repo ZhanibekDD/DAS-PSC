@@ -153,23 +153,16 @@ class _Page:
         return False
 
 
-def _opener(server_password_works):
-    import urllib.error
+def test_ui_smoke_tries_no_password(monkeypatch):
+    seen = []
 
     def open_(request, timeout=None):
-        if request.full_url.endswith("/login"):
-            return _Page(200, "<h1>Вход в ПСК</h1>".encode())
-        if server_password_works:
-            return _Page(200)
-        raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, None)
-    return open_
-
-
-def test_ui_smoke_survives_a_psc_password_changed_in_the_interface(monkeypatch):
-    monkeypatch.setattr(p.HTTP, "open", _opener(True))
-    assert p.ui_smoke("http://127.0.0.1:18090", "server-pass") == "server password"
-    monkeypatch.setattr(p.HTTP, "open", _opener(False))
-    assert p.ui_smoke("http://127.0.0.1:18090", "server-pass").startswith("login page")
+        seen.append((request.full_url, request.headers))
+        return _Page(200, "<h1>Вход в ПСК</h1>".encode())
+    monkeypatch.setattr(p.HTTP, "open", open_)
+    assert p.ui_smoke("http://127.0.0.1:18090") == "login page"
+    assert [url for url, _ in seen] == ["http://127.0.0.1:18090/login"]
+    assert not any("Authorization" in headers for _, headers in seen)
 
 
 def test_ui_smoke_still_fails_on_a_broken_ui(monkeypatch):
@@ -178,5 +171,8 @@ def test_ui_smoke_still_fails_on_a_broken_ui(monkeypatch):
     def broken(request, timeout=None):
         raise urllib.error.HTTPError(request.full_url, 500, "Error", {}, None)
     monkeypatch.setattr(p.HTTP, "open", broken)
+    with pytest.raises(urllib.error.HTTPError):
+        p.ui_smoke("http://127.0.0.1:18090")
+    monkeypatch.setattr(p.HTTP, "open", lambda request, timeout=None: _Page(200, b"<h1>other service</h1>"))
     with pytest.raises(p.Blocked):
-        p.ui_smoke("http://127.0.0.1:18090", "server-pass")
+        p.ui_smoke("http://127.0.0.1:18090")

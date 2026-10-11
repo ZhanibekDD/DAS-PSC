@@ -69,7 +69,22 @@ def test_block_is_journaled_once_per_address_and_window():
     assert throttle.first_block('addr:y')
     clock[0] += 901
     assert throttle.first_block('addr:x')
-    assert set(throttle.block_logged) == {'addr:x'}  # expired entries are dropped, memory stays bounded
+    throttle.attempt('addr:z', 'user:z')  # the periodic sweep drops expired entries: memory stays bounded
+    assert set(throttle.block_logged) == {'addr:x'}
+
+
+def test_blocked_login_from_rotating_addresses_is_journaled_once():
+    from app.auth import Throttle
+    clock = [1000.0]
+    throttle = Throttle(limit=5, window=900, clock=lambda: clock[0])
+    for n in range(5):
+        assert throttle.attempt(f'addr:10.0.0.{n}', 'user:psc') is not None
+    logged = 0
+    for n in range(200):  # e.g. IPv6 addresses: each request is refused by the login's own count
+        keys = (f'addr:2001:db8::{n:x}', 'user:psc')
+        assert throttle.attempt(*keys) is None
+        logged += throttle.first_block(*keys)
+    assert logged == 1 and set(throttle.block_logged) == {'user:psc'}
 
 
 def test_keys_of_logins_never_tried_again_expire():
