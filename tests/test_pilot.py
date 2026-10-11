@@ -137,3 +137,46 @@ def test_requested_but_unpublished_port_rejected():
     item,cfg,network=example()
     item['NetworkSettings']['Ports']={'8080/tcp':None}
     with pytest.raises(p.Blocked): p.validate_runtime(item,cfg,network)
+
+
+class _Page:
+    def __init__(self, status, body=b""):
+        self.status, self.body = status, body
+
+    def read(self):
+        return self.body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _opener(server_password_works):
+    import urllib.error
+
+    def open_(request, timeout=None):
+        if request.full_url.endswith("/login"):
+            return _Page(200, "<h1>Вход в ПСК</h1>".encode())
+        if server_password_works:
+            return _Page(200)
+        raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, None)
+    return open_
+
+
+def test_ui_smoke_survives_a_psc_password_changed_in_the_interface(monkeypatch):
+    monkeypatch.setattr(p.HTTP, "open", _opener(True))
+    assert p.ui_smoke("http://127.0.0.1:18090", "server-pass") == "server password"
+    monkeypatch.setattr(p.HTTP, "open", _opener(False))
+    assert p.ui_smoke("http://127.0.0.1:18090", "server-pass").startswith("login page")
+
+
+def test_ui_smoke_still_fails_on_a_broken_ui(monkeypatch):
+    import urllib.error
+
+    def broken(request, timeout=None):
+        raise urllib.error.HTTPError(request.full_url, 500, "Error", {}, None)
+    monkeypatch.setattr(p.HTTP, "open", broken)
+    with pytest.raises(p.Blocked):
+        p.ui_smoke("http://127.0.0.1:18090", "server-pass")
