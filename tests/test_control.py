@@ -341,3 +341,13 @@ def test_issue_pagination_and_optimistic_lock(client):
         new_issue(client,p,title=f'Synthetic {n}')
     r=client.get(f'/api/projects/{p}/prescriptions',params={'page':2}).json()
     assert r['total'] == 51 and len(r['items']) == 1
+
+
+def test_pagination_links_stay_on_the_browser_origin(client):
+    # Behind nginx the app sees Host 127.0.0.1 over http: absolute links would leave the HTTPS site.
+    p=project(client)
+    for n in range(51):
+        new_issue(client,p,title=f'Synthetic {n}')
+    html=client.get(f'/projects/{p}/control',params={'status':'open'},headers={'Host':'127.0.0.1'}).text
+    assert 'href="?status=open&amp;page=2#issues"' in html
+    assert 'http://127.0.0.1' not in html
