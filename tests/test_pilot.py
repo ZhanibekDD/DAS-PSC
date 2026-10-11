@@ -137,3 +137,42 @@ def test_requested_but_unpublished_port_rejected():
     item,cfg,network=example()
     item['NetworkSettings']['Ports']={'8080/tcp':None}
     with pytest.raises(p.Blocked): p.validate_runtime(item,cfg,network)
+
+
+class _Page:
+    def __init__(self, status, body=b""):
+        self.status, self.body = status, body
+
+    def read(self):
+        return self.body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_ui_smoke_tries_no_password(monkeypatch):
+    seen = []
+
+    def open_(request, timeout=None):
+        seen.append((request.full_url, request.headers))
+        return _Page(200, "<h1>Вход в ПСК</h1>".encode())
+    monkeypatch.setattr(p.HTTP, "open", open_)
+    assert p.ui_smoke("http://127.0.0.1:18090") == "login page"
+    assert [url for url, _ in seen] == ["http://127.0.0.1:18090/login"]
+    assert not any("Authorization" in headers for _, headers in seen)
+
+
+def test_ui_smoke_still_fails_on_a_broken_ui(monkeypatch):
+    import urllib.error
+
+    def broken(request, timeout=None):
+        raise urllib.error.HTTPError(request.full_url, 500, "Error", {}, None)
+    monkeypatch.setattr(p.HTTP, "open", broken)
+    with pytest.raises(urllib.error.HTTPError):
+        p.ui_smoke("http://127.0.0.1:18090")
+    monkeypatch.setattr(p.HTTP, "open", lambda request, timeout=None: _Page(200, b"<h1>other service</h1>"))
+    with pytest.raises(p.Blocked):
+        p.ui_smoke("http://127.0.0.1:18090")

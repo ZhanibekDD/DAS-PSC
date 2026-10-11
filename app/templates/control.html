@@ -73,7 +73,7 @@
       </article>
     {% else %}<div class="empty-inline">По этому фильтру замечаний нет.</div>{% endfor %}
     </div>
-    <div class="pagination">{% if issues.page > 1 %}<a href="{{ request.url.include_query_params(page=issues.page-1) }}#issues">← Назад</a>{% endif %}{% if issues.page * issues.page_size < issues.total %}<a href="{{ request.url.include_query_params(page=issues.page+1) }}#issues">Дальше →</a>{% endif %}</div>
+    <div class="pagination">{% if issues.page > 1 %}<a href="?{{ request.url.include_query_params(page=issues.page-1).query }}#issues">← Назад</a>{% endif %}{% if issues.page * issues.page_size < issues.total %}<a href="?{{ request.url.include_query_params(page=issues.page+1).query }}#issues">Дальше →</a>{% endif %}</div>
   </section>
 </section>
 

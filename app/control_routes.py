@@ -1,14 +1,10 @@
 """Construction-control endpoints share the existing authentication and same-origin guard."""
-from pathlib import Path
-
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 
 from app.control import Control, IssueInput, IssueUpdate, StageInput, StageUpdate, STAGE_STATES, ISSUE_STATES
 
 router = APIRouter()
-templates = Jinja2Templates(directory=Path(__file__).resolve().parent / "templates")
 
 
 def control(request: Request) -> Control:
@@ -19,10 +15,11 @@ def control(request: Request) -> Control:
 def board(request: Request, pid: str, status: str = Query(default="", max_length=20),
           overdue: bool = False, page: int = Query(default=1, ge=1, le=100000)):
     service = control(request)
-    return templates.TemplateResponse(request=request, name="control.html", context={
-        "project": service.store.project(pid), "stages": service.stages(pid),
-        "issues": service.issues(pid, status, overdue, page), "control": service.summary(pid),
-        "stage_states": STAGE_STATES, "issue_states": ISSUE_STATES, "status": status, "overdue": overdue})
+    # The shared renderer supplies current_user and app_version, so the menu and account links stay.
+    return request.app.state.render(
+        request, "control.html", project=service.store.project(pid), stages=service.stages(pid),
+        issues=service.issues(pid, status, overdue, page), control=service.summary(pid),
+        stage_states=STAGE_STATES, issue_states=ISSUE_STATES, status=status, overdue=overdue)
 
 
 @router.get("/api/projects/{pid}/control")

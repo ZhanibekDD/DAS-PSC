@@ -15,9 +15,10 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from app.auth import SESSION_COOKIE, SESSION_HOURS, Auth, LoginRejected
 from app.control import Control
 from app.control_routes import router as control_router
-from app.security import GuardMiddleware
+from app.security import GuardMiddleware, behind_https, client_address
 from app.services.classifier import HIGH_CONFIDENCE, SERVICE, UNKNOWN
 from app.services.zip_analyzer import DEFAULT_LIMITS, analyze_zip
 from app.store import Conflict, NotFound, Store
@@ -75,6 +76,44 @@ class ReclassifyInput(BaseModel):
     expected_token: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
 
 
+class LoginInput(BaseModel):
+    username: str = Field(min_length=1, max_length=60)
+    password: str = Field(min_length=1, max_length=200)
+    next: str = Field(default="/", max_length=500)
+
+
+class PasswordInput(BaseModel):
+    current: str = Field(min_length=1, max_length=200)
+    new: str = Field(min_length=1, max_length=200)
+    repeat: str = Field(min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def same(self):
+        if self.new != self.repeat:
+            raise ValueError("Новый пароль и повтор не совпадают")
+        return self
+
+
+class UserInput(BaseModel):
+    username: str = Field(min_length=1, max_length=60)
+    display_name: str = Field(default="", max_length=120)
+    role: str = Field(default="user", pattern=r"^(admin|user)$")
+    password: str = Field(min_length=1, max_length=200)
+
+
+class ResetInput(BaseModel):
+    password: str = Field(min_length=1, max_length=200)
+
+
+class ActiveInput(BaseModel):
+    active: bool
+
+
+def safe_next(value: str) -> str:
+    """Only same-site paths: no scheme, no //host, no backslashes."""
+    return value if value.startswith("/") and not value.startswith("//") and "\\" not in value else "/"
+
+
 def create_app(data_dir: Path | None = None, password: str | None = None) -> FastAPI:
     directory = Path(data_dir or os.environ.get("PSC_DATA_DIR", "data"))
     shared_password = os.environ.get("PSC_PASSWORD", "") if password is None else password
@@ -86,6 +125,8 @@ def create_app(data_dir: Path | None = None, password: str | None = None) -> Fas
         application.state.store = Store(directory / "psc.sqlite3", CONFIG["required_categories"])
         application.state.control = Control(application.state.store, os.environ.get("PSC_TIMEZONE", "UTC"))
         application.state.control.initialize()
+        application.state.auth = Auth(application.state.store)
+        application.state.auth.initialize(shared_password)
         yield
 
     app = FastAPI(title="DAS-PSC", version=APP_VERSION, lifespan=lifespan)
@@ -114,15 +155,92 @@ def create_app(data_dir: Path | None = None, password: str | None = None) -> Fas
                 "unknown": UNKNOWN,
                 "service": SERVICE,
                 "app_version": APP_VERSION,
+                "current_user": getattr(request.state, "user", None),
                 **context,
             },
         )
+
+    app.state.render = render  # routers outside this module get the same base context
 
     @app.get("/health")
     def health(request: Request):
         with store(request).connect() as db:
             db.execute("SELECT 1").fetchone()
         return {"status": "ok", "service": "das-psc", "version": APP_VERSION}
+
+    def address(request: Request) -> str:
+        return client_address(request.scope, {k.lower(): v for k, v in request.scope["headers"]})
+
+    def current(request: Request) -> dict:
+        return getattr(request.state, "user", None) or {}
+
+    @app.get("/login", response_class=HTMLResponse)
+    def login_page(request: Request, next: str = Query(default="/", max_length=500)):
+        return render(request, "login.html", next=safe_next(next))
+
+    @app.post("/api/login")
+    def login(request: Request, values: LoginInput):
+        try:
+            token, user = request.app.state.auth.login(values.username, values.password, address(request))
+        except LoginRejected as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=401)
+        response = JSONResponse({"url": "/account" if user["must_change"] else safe_next(values.next)})
+        secure = behind_https(request.scope, {k.lower(): v for k, v in request.scope["headers"]})
+        response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_HOURS * 3600, httponly=True,
+                            samesite="lax", secure=secure, path="/")
+        return response
+
+    @app.post("/api/logout")
+    def logout(request: Request):
+        token = request.cookies.get(SESSION_COOKIE, "")
+        if token:
+            request.app.state.auth.logout(token, address(request))
+        response = JSONResponse({"url": "/login"})
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        return response
+
+    @app.get("/account", response_class=HTMLResponse)
+    def account(request: Request):
+        return render(request, "account.html", user=current(request))
+
+    @app.post("/api/account/password")
+    def change_password(request: Request, values: PasswordInput):
+        user = current(request)
+        if not user.get("id"):
+            raise HTTPException(400, "В локальном режиме пароль не используется")
+        try:
+            request.app.state.auth.change_password(user["id"], values.current, values.new, address(request))
+        except LoginRejected as exc:
+            raise HTTPException(400, str(exc)) from exc
+        response = JSONResponse({"url": "/login"})
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        return response
+
+    @app.get("/users", response_class=HTMLResponse)
+    def users_page(request: Request):
+        auth = request.app.state.auth
+        return render(request, "users.html", users=auth.users(), events=auth.events(50), user=current(request))
+
+    @app.get("/api/users")
+    def list_users(request: Request):
+        return request.app.state.auth.users()
+
+    @app.post("/api/users", status_code=201)
+    def add_user(request: Request, values: UserInput):
+        created = request.app.state.auth.create_user(values.username, values.display_name, values.role,
+                                                     values.password, current(request).get("username", ""))
+        return {**created, "url": "/users"}
+
+    @app.post("/api/users/{uid}/password")
+    def reset_user_password(request: Request, uid: int, values: ResetInput):
+        request.app.state.auth.reset_password(uid, values.password, current(request).get("username", ""))
+        return {"url": "/users"}
+
+    @app.post("/api/users/{uid}/active")
+    def set_user_active(request: Request, uid: int, values: ActiveInput):
+        user = current(request)
+        request.app.state.auth.set_active(uid, values.active, user.get("id", 0), user.get("username", ""))
+        return {"url": "/users"}
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request):

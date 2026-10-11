@@ -7,7 +7,6 @@ Credentials and a redacted container baseline stay in .state/ (owner-only).
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import json
 import os
@@ -193,6 +192,16 @@ def validate_runtime(item, cfg, network):
         raise Blocked("Runtime isolation/limits differ from the approved configuration")
 
 
+def ui_smoke(url):
+    """A probe that changes nothing: the login page answers. No password is tried here: once the
+    administrator changes the psc password in the interface the server password is stale, and each
+    attempt with it would count as a failed login (five lock psc out for 15 minutes)."""
+    with HTTP.open(urllib.request.Request(url+"/login", headers={"Accept":"text/html"}), timeout=5) as page:
+        if page.status != 200 or "Вход в ПСК" not in page.read().decode("utf-8", "replace"):
+            raise Blocked("Login page smoke failed")
+    return "login page"
+
+
 def verify(cfg):
     cid = own_id(cfg)
     # Runtime inspection stays in memory, never printed (Config contains a password).
@@ -212,15 +221,13 @@ def verify(cfg):
             raise Blocked("Unexpected unauthenticated response") from exc
     else:
         raise Blocked("Authentication is not enforced")
-    token = base64.b64encode(("psc:"+cfg["password"]).encode()).decode()
-    with HTTP.open(urllib.request.Request(url+"/", headers={"Authorization":"Basic "+token}), timeout=5) as response:
-        if response.status != 200:
-            raise Blocked("Authenticated UI smoke failed")
+    ui_smoke(url)
     baseline = json.loads((HERE/".state/baseline.json").read_text())["containers"]
     changed = changes(baseline, containers())
     if changed:
         raise Blocked("Non-pilot container state changed: "+", ".join(changed)+". Investigate; do not restart them")
     return {"status":"PILOT_PASS", "url_on_server":url, "source_commit":cfg["commit"],
+            "auth":"401 without credentials, login page answers; no password tried",
             "cpu_limit":1, "ram_limit_gib":1, "gpu":"not attached", "other_containers":"unchanged in this snapshot"}
 
 
