@@ -85,8 +85,32 @@ def test_keys_of_logins_never_tried_again_expire():
 
 
 def test_cookie_is_secure_behind_the_https_proxy(tmp_path):
-    with client(tmp_path) as c:
+    with client(tmp_path, client=('127.0.0.1', 50000)) as c:  # the configured (loopback) proxy
         assert 'secure' in login(c, headers={'X-Forwarded-Proto': 'https'}).headers['set-cookie'].lower()
+    with client(tmp_path, client=('203.0.113.7', 50000)) as c:  # not a proxy: the header is ignored
+        assert 'secure' not in login(c, headers={'X-Forwarded-Proto': 'https'}).headers['set-cookie'].lower()
+
+
+def test_current_password_guesses_are_limited(tmp_path):
+    with client(tmp_path) as c:
+        assert login(c).status_code == 200
+        change = lambda current: c.post('/api/account/password', json={'current': current, 'new': 'Chosen-by-admin7', 'repeat': 'Chosen-by-admin7'}, headers=H)
+        for _ in range(5):
+            r = change('wrong-password-1')
+            assert r.status_code == 400 and 'неверно' in r.json()['detail']
+        r = change(PW)
+        assert r.status_code == 400 and 'Подождите 15 минут' in r.json()['detail']
+
+
+def test_logins_are_latin_so_case_folding_is_exact(tmp_path):
+    with client(tmp_path) as c:
+        login(c)
+        for name in ('Иван', 'иван', 'pétrov'):
+            r = c.post('/api/users', json={'username': name, 'password': 'Ivan-pass-123'}, headers=H)
+            assert r.status_code == 400 and 'латинские' in r.json()['detail'], name
+        ok = c.post('/api/users', json={'username': 'i.petrov@dnepr', 'display_name': 'Иван Петров', 'password': 'Ivan-pass-123'}, headers=H)
+        assert ok.status_code == 201 and ok.json()['display_name'] == 'Иван Петров'
+        assert c.post('/api/users', json={'username': 'I.Petrov@Dnepr', 'password': 'Ivan-pass-123'}, headers=H).status_code == 409
 
 
 def test_new_user_must_replace_the_temporary_password(tmp_path):

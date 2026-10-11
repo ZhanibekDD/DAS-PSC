@@ -18,7 +18,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from app.auth import SESSION_COOKIE, SESSION_HOURS, Auth, LoginRejected
 from app.control import Control
 from app.control_routes import router as control_router
-from app.security import GuardMiddleware, client_address
+from app.security import GuardMiddleware, behind_https, client_address
 from app.services.classifier import HIGH_CONFIDENCE, SERVICE, UNKNOWN
 from app.services.zip_analyzer import DEFAULT_LIMITS, analyze_zip
 from app.store import Conflict, NotFound, Store
@@ -185,7 +185,7 @@ def create_app(data_dir: Path | None = None, password: str | None = None) -> Fas
         except LoginRejected as exc:
             return JSONResponse({"detail": str(exc)}, status_code=401)
         response = JSONResponse({"url": "/account" if user["must_change"] else safe_next(values.next)})
-        secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+        secure = behind_https(request.scope, {k.lower(): v for k, v in request.scope["headers"]})
         response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_HOURS * 3600, httponly=True,
                             samesite="lax", secure=secure, path="/")
         return response

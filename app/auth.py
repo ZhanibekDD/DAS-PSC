@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import re
 import secrets
 import threading
 import time
@@ -24,6 +25,7 @@ MIN_PASSWORD = 10
 MAX_FAILURES = 5
 LOCK_SECONDS = 15 * 60
 SWEEP_SECONDS = 60
+USERNAME_RE = re.compile(r"[A-Za-z0-9._@-]{1,60}")
 
 SCHEMA = [
     """CREATE TABLE IF NOT EXISTS users (
@@ -264,8 +266,10 @@ class Auth:
 
     def create_user(self, username: str, display_name: str, role: str, password: str, actor: str) -> dict:
         username = username.strip()
-        if not username or len(username) > 60 or any(c.isspace() for c in username):
-            raise ValueError("Логин: от 1 до 60 символов без пробелов")
+        # ASCII only: SQLite's NOCASE folds only ASCII, so «Иван» and «иван» would be two accounts
+        # sharing one lockout key. The Russian name goes into the display name.
+        if not USERNAME_RE.fullmatch(username):
+            raise ValueError("Логин: латинские буквы, цифры и . _ - @, до 60 символов, без пробелов")
         if role not in {"admin", "user"}:
             raise ValueError("Неизвестная роль")
         validate_password(password)
@@ -279,14 +283,25 @@ class Auth:
 
     def change_password(self, user_id: int, current: str, new: str, address: str) -> None:
         validate_password(new)
-        with self.store.connect(write=True) as db:
+        # Guessing the current password with a stolen session is limited like a login, and the
+        # hash work runs outside the write transaction.
+        keys = ("addr:" + address, f"pwd:{user_id}")
+        stamp = self.throttle.attempt(*keys)
+        if stamp is None:
+            raise LoginRejected("Слишком много неверных попыток. Подождите 15 минут.")
+        with self.store.connect() as db:
             row = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
-            if not row or not check_password(current, row["password_hash"]):
-                raise LoginRejected("Текущий пароль указан неверно")
-            if check_password(new, row["password_hash"]):
-                raise ValueError("Новый пароль должен отличаться от текущего")
-            db.execute("UPDATE users SET password_hash=?, must_change=0, password_source='user' WHERE id=?",
-                       (hash_password(new), user_id))
+        if not row or not check_password(current, row["password_hash"]):
+            raise LoginRejected("Текущий пароль указан неверно")
+        self.throttle.succeeded(stamp, *keys)
+        if check_password(new, row["password_hash"]):
+            raise ValueError("Новый пароль должен отличаться от текущего")
+        new_hash = hash_password(new)
+        with self.store.connect(write=True) as db:
+            changed = db.execute("""UPDATE users SET password_hash=?, must_change=0, password_source='user'
+                WHERE id=? AND password_hash=?""", (new_hash, user_id, row["password_hash"])).rowcount
+            if changed != 1:  # changed or reset meanwhile: the checked current password is stale
+                raise Conflict("Пароль уже изменён. Войдите заново.")
             db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
             self._event(db, row["username"], "password_changed", address, row["username"])
 

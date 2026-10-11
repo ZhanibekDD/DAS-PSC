@@ -46,7 +46,7 @@
   <form data-request="/api/users" data-json="true">
     <div class="form-grid">
       <label>Имя и фамилия<input name="display_name" required maxlength="120" placeholder="Например: Иван Петров"></label>
-      <label>Логин<input name="username" required maxlength="60" autocomplete="off" placeholder="Например: ipetrov"></label>
+      <label>Логин<input name="username" required maxlength="60" pattern="[A-Za-z0-9._@\-]+" title="Латинские буквы, цифры и . _ - @" autocomplete="off" placeholder="Например: ipetrov"></label>
       <label>Роль<select name="role"><option value="user">Сотрудник</option><option value="admin">Администратор</option></select></label>
       <label>Временный пароль<input name="password" type="password" required minlength="10" maxlength="200" autocomplete="new-password"></label>
     </div>

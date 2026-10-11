@@ -53,17 +53,33 @@ def trusted_proxies(raw: str | None = None, route_file: str = "/proc/net/route")
     return tuple(networks)
 
 
+def from_proxy(scope, trusted=None) -> bool:
+    trusted = trusted_proxies() if trusted is None else trusted
+    try:
+        peer = ipaddress.ip_address((scope.get("client") or ("",))[0])
+    except ValueError:
+        return False
+    return any(peer in network for network in trusted)
+
+
 def client_address(scope, headers, trusted=None) -> str:
     """The proxy's X-Real-IP is trusted only when the connection comes from a configured proxy."""
-    trusted = trusted_proxies() if trusted is None else trusted
     peer = (scope.get("client") or ("",))[0]
     forwarded = headers.get(b"x-real-ip", b"").decode("latin-1").strip()
     try:
-        if forwarded and any(ipaddress.ip_address(peer) in network for network in trusted):
+        if forwarded and from_proxy(scope, trusted):
             return str(ipaddress.ip_address(forwarded))
     except ValueError:
         pass
     return peer
+
+
+def behind_https(scope, headers, trusted=None) -> bool:
+    """HTTPS to the app itself, or X-Forwarded-Proto: https from a configured proxy (as for X-Real-IP)."""
+    if scope.get("scheme") == "https":
+        return True
+    proto = headers.get(b"x-forwarded-proto", b"").decode("latin-1").strip().lower()
+    return proto == "https" and from_proxy(scope, trusted)
 
 
 def session_token(headers) -> str:
